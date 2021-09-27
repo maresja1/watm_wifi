@@ -6,30 +6,7 @@
 // include the library code:
 #include <LiquidCrystal.h>
 
-typedef struct ConfigMenuItem {
-    const char *name;
-    void* param;
-    void* (*handler)(void* param, int8_t diff);
-    void (*formatter)(void* param, char *buffer, int16_t maxLen, void *value);
-} ConfigMenuItem_t;
-
-struct Configuration {
-    uint8_t refTempBoiler;
-    uint8_t refTempBoilerIdle;
-    float refTempRoom;
-    uint8_t circuitRelayForced;
-    int16_t servoMin;
-    int16_t servoMax;
-    uint8_t curveItems;
-    float debounceLimitC;
-    uint8_t underheatingLimit;
-    uint8_t overheatingLimit;
-};
-
-typedef struct Button {
-    uint8_t pin;
-    uint8_t *state;
-} Button_t;
+#include "Thermoino.h"
 
 #define DEBUG 1
 #define SERVO_PIN 6
@@ -107,7 +84,7 @@ void setup() {
     lcd.begin(16, 2);
 
     eepromInit();
-    Serial.println("Setup finished.");
+    Serial.println("Thermoino 1 - Setup finished.");
 }
 
 void loop() {
@@ -336,19 +313,19 @@ void menuFormatterFloatValue(__attribute__((unused)) void* param, char *pBuffer,
 void menuFormatterCircuitOverride(__attribute__((unused)) void* param, char *pBuffer, int16_t maxLen, void *value) {
     switch (*(int8_t*) value) {
         case 0:
-            snprintf(pBuffer, maxLen, PSTR("no override"));
+            snprintf(pBuffer, maxLen, ("no override"));
             break;
         case 1:
-            snprintf(pBuffer, maxLen,  PSTR("always enabled"));
+            snprintf(pBuffer, maxLen,  ("always enabled"));
             break;
         case 2:
-            snprintf(pBuffer, maxLen,  PSTR("always disabled"));
+            snprintf(pBuffer, maxLen,  ("always disabled"));
             break;
     }
 }
 
 #define MENU_STATIC_ITEMS 10
-const ConfigMenuItem_t menu[] PROGMEM = {
+const ConfigMenuItem_t menu[]  = {
         {
                 .name = "Boiler Temp.",
                 .param = nullptr,
@@ -421,7 +398,7 @@ const struct ConfigMenuItem *getMenu(int16_t itemIndex)
         uint16_t index = itemIndex - MENU_STATIC_ITEMS;
         bool isY = (index % 2) == 1;
         uintptr_t i = index / 2;
-        snprintf(bufferMenuName, 20, PSTR("[E] Curve[%d].%s"), i, isY ? "%" : "dC");
+        snprintf(bufferMenuName, 20, ("[E] Curve[%d].%s"), i, isY ? "%" : "dC");
         bufferMenuItem.name = bufferMenuName;
         bufferMenuItem.handler = isY ? &menuHandlerCurveItemY : &menuHandlerCurveItemX;
         bufferMenuItem.formatter = isY ? &menuFormatterUInt8Value : &menuFormatterInt8Value;
@@ -431,19 +408,19 @@ const struct ConfigMenuItem *getMenu(int16_t itemIndex)
 }
 
 uint8_t btnStates[4] = {LOW, LOW, LOW, LOW};
-const Button_t btn1 PROGMEM = {
+const Button_t btn1  = {
         .pin = BTN_1_PIN,
         .state = &btnStates[0]
 };
-const Button_t btn2 PROGMEM = {
+const Button_t btn2  = {
         .pin = BTN_2_PIN,
         .state = &btnStates[1]
 };
-const Button_t btn3 PROGMEM = {
+const Button_t btn3  = {
         .pin = BTN_3_PIN,
         .state = &btnStates[2]
 };
-const Button_t btn4 PROGMEM = {
+const Button_t btn4  = {
         .pin = BTN_4_PIN,
         .state = &btnStates[3]
 };
@@ -485,7 +462,7 @@ void printStatusOverview() {
     snprintf(
             buffer,
             MAX_BUFFER_LEN,
-            PSTR("C:%c%c H:%c"),
+            ("C:%c%c H:%c"),
             config.circuitRelayForced != 0 ? 'O' : (
                     circuitRelay == 1 ? 'Y' : 'N'
             ),
@@ -498,11 +475,11 @@ void printStatusOverview() {
 
     lcd.setCursor(0, 1);
     dtostrf(boilerTemp, 3, 1, numberFormatBuffer);
-    snprintf(buffer, MAX_BUFFER_LEN, PSTR("B:%sC  "), numberFormatBuffer);
+    snprintf(buffer, MAX_BUFFER_LEN, ("B:%sC  "), numberFormatBuffer);
     lcd.print(buffer);
     lcd.setCursor(9, 1);
     dtostrf(roomTemp, 2, 1, numberFormatBuffer);
-    snprintf(buffer, MAX_BUFFER_LEN, PSTR("R:%sC  "), numberFormatBuffer);
+    snprintf(buffer, MAX_BUFFER_LEN, ("R:%sC  "), numberFormatBuffer);
     lcd.print(buffer);
 }
 
