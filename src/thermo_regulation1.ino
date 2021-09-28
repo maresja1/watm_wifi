@@ -8,18 +8,15 @@
 
 #include "Thermoino.h"
 
-#define DEBUG 1
+#define DEBUG_LEVEL 2
 #define SERVO_PIN 6
 #define CIRCUIT_RELAY_PIN 7
 #define BTN_1_PIN 5
 #define BTN_2_PIN 4
 #define BTN_3_PIN 3
 #define BTN_4_PIN 2
-
-const int minV = 58;
-const int minTemp = -40;
-// (maxTemp=125 - minTemp) / (maxV - minV=995)
-const float resTemp = 5.824242424f;
+#define BOILER_THERM_PIN A0
+#define ROOM_THERM_PIN A1
 
 // initialize the library with the numbers of the interface pins
 LiquidCrystal lcd(13, 12, 11, 10, 9, 8);
@@ -59,7 +56,7 @@ int8_t tempDoorOverride = 0;
 int8_t tempDoorOverrideTimeout = 0;
 
 void eepromInit();
-float readTemp(int port);
+float readTemp(uint8_t port);
 bool processSettings();
 void printStatus();
 void servoSetPos(int positionPercent);
@@ -84,18 +81,18 @@ void setup() {
     lcd.begin(16, 2);
 
     eepromInit();
-    Serial.println("Thermoino 1 - Setup finished.");
+    Serial.println("Thermoino 1, built:" __DATE__ " " __TIME__ " (" __FILE__ ") - Setup finished.");
 }
 
 void loop() {
-    int stateChanged = processSettings();
+    bool stateChanged = processSettings();
     float lastBoilerTemp = boilerTemp;
     float lastRoomTemp = roomTemp;
 
-    boilerTemp = readTemp(A0);
-    roomTemp = readTemp(A1);
+    boilerTemp = readTemp(BOILER_THERM_PIN);
+    roomTemp = readTemp(ROOM_THERM_PIN);
 
-    int lastAngle = angle;
+    uint8_t lastAngle = angle;
     angle = 100;
 
     heatNeeded = (heatNeeded && (roomTemp - config.refTempRoom <= (config.debounceLimitC / 2))) ||
@@ -137,7 +134,7 @@ void loop() {
                          (boilerTemp != lastBoilerTemp) ||
                          (roomTemp != lastRoomTemp);
 
-#ifdef DEBUG
+#if DEBUG_LEVEL > 1
     if (inputsChanged) {
         Serial.print("boilerTemp: ");
         Serial.print(boilerTemp);
@@ -181,10 +178,24 @@ void loop() {
     delay(10);
 }
 
-float readTemp(int port) {
-    int mV = analogRead(port);
-    return ((mV - minV) / resTemp) + minTemp;
+// (1/T_0) - 25 => 1 / (25 + 237.15) => 0.00381461f
+#define THERM_RESIST_SERIAL 10000
+#define THERM_REF_TEMP_INV 0.003354016f
+#define THERM_REF_RESIST 10000
+#define THERM_BETA 3977
+#define DEBUG_SER_PRINT(x) do { Serial.print(#x": "); Serial.print(x); Serial.println(""); } while(0);
 
+float readTemp(uint8_t pin) {
+    int V_out = analogRead(pin);
+    // R_1 = R_2 * ( V_in / V_out - 1 ); V_in = 1023 (3.3V after conv.), R_2 = #THERM_RESIST_SERIAL
+    float R_1 = float(THERM_RESIST_SERIAL * (float(1023 - V_out) / float(V_out)));
+#if DEBUG_LEVEL > 2
+    DEBUG_SER_PRINT(V_out)
+    DEBUG_SER_PRINT(R_1)
+#endif
+    // 1 / T = 1 / T_0 + 1 / B * ln(R_1 / R_0); (1 / T_0) = #THERM_REF_TEMP_INV, R_0 = #THERM_REF_RESIST, B = #THERM_BETA
+    float T = float((1 / (THERM_REF_TEMP_INV + (log(R_1 / THERM_REF_RESIST) / THERM_BETA))) - 273.15f);
+    return lround(T * 16) / 16.0f;
 }
 
 int8_t readButton(Button_t button) {
@@ -238,7 +249,7 @@ void *menuHandlerCurveItems(__attribute__((unused)) void* param, int8_t diff) {
 
 void *menuHandlerCurveItemX(void* param, int8_t diff) {
     uintptr_t index = (uintptr_t)param;
-#ifdef DEBUG
+#if DEBUG_LEVEL > 2
     Serial.print("menuHandlerCurveItemX - index: ");
     Serial.print(index);
     Serial.print(", value: ");
@@ -253,7 +264,7 @@ void *menuHandlerCurveItemX(void* param, int8_t diff) {
 
 void *menuHandlerCurveItemY(void* param, int8_t diff) {
     uintptr_t index = (uintptr_t)param;
-#ifdef DEBUG
+#if DEBUG_LEVEL > 2
     Serial.print("menuHandlerCurveItemY - index: ");
     Serial.print(index);
     Serial.print(", value: ");
@@ -492,6 +503,7 @@ void printStatus() {
     }
 }
 
+#define EXPERT_MENU_ITEMS
 #define MAX_MENU_ITEMS (MENU_STATIC_ITEMS + (config.curveItems * 2) + 1)
 
 void eepromUpdate();
