@@ -4,7 +4,7 @@
 #include <Servo.h>
 
 // include the library code:
-#include <LiquidCrystal.h>
+#include <LiquidCrystal_I2C.h>
 
 #include "Thermoino.h"
 
@@ -19,7 +19,7 @@
 #define ROOM_THERM_PIN A1
 
 // initialize the library with the numbers of the interface pins
-LiquidCrystal lcd(13, 12, 11, 10, 9, 8);
+LiquidCrystal_I2C lcd(0x27, 2, 1, 0, 4, 5, 6, 7);
 
 #define MAX_DELTA_SETTINGS 10
 
