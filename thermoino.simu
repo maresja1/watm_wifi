@@ -122,11 +122,11 @@ Circuit Id: Node-3
 
 Unique  Id: Termistor-117: 
 Circuit Id: Termistor-117
-<item itemtype="Termistor" Min_Temp="15" valLabelx="-16" rotation="0" objectName="Termistor-117" id="Termistor-117" Temp="30" Dial_Step="1" vflip="1" mainComp="false" y="-172" circPos="0,0" valLabely="30" x="-224" B="3977" labely="-24" R25="10000" Max_Temp="30" valLabRot="0" Show_id="false" boardRot="-1000000" boardPos="-1e+06,-1e+06" circRot="1.9503711720078048e-316" hflip="1" labelrot="0" labelx="-16"/>
+<item itemtype="Termistor" Min_Temp="15" valLabelx="-16" rotation="0" objectName="Termistor-117" id="Termistor-117" Temp="21" Dial_Step="1" vflip="1" mainComp="false" y="-172" circPos="0,0" valLabely="30" x="-224" B="3977" labely="-24" R25="10000" Max_Temp="30" valLabRot="0" Show_id="false" boardRot="-1000000" boardPos="-1e+06,-1e+06" circRot="1.9503711720078048e-316" hflip="1" labelrot="0" labelx="-16"/>
 
 Unique  Id: Termistor-129: 
 Circuit Id: Termistor-117
-<item itemtype="Termistor" Min_Temp="0" valLabelx="-16" rotation="0" objectName="Termistor-129" id="Termistor-117" Temp="82" Dial_Step="1" vflip="1" mainComp="false" y="-120" circPos="0,0" valLabely="30" x="-224" B="3977" labely="-24" R25="10000" Max_Temp="100" valLabRot="0" Show_id="false" boardRot="-1000000" boardPos="-1e+06,-1e+06" circRot="1.9503711720078048e-316" hflip="1" labelrot="0" labelx="-16"/>
+<item itemtype="Termistor" Min_Temp="0" valLabelx="-16" rotation="0" objectName="Termistor-129" id="Termistor-117" Temp="56" Dial_Step="1" vflip="1" mainComp="false" y="-120" circPos="0,0" valLabely="30" x="-224" B="3977" labely="-24" R25="10000" Max_Temp="100" valLabRot="0" Show_id="false" boardRot="-1000000" boardPos="-1e+06,-1e+06" circRot="1.9503711720078048e-316" hflip="1" labelrot="0" labelx="-16"/>
 
 Unique  Id: Resistor-147: 
 Circuit Id: Resistor-147

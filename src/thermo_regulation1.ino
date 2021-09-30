@@ -19,7 +19,7 @@
 #define ROOM_THERM_PIN A1
 
 // initialize the library with the numbers of the interface pins
-LiquidCrystal_I2C lcd(0x27, 2, 1, 0, 4, 5, 6, 7);
+LiquidCrystal_I2C lcd(0x27, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE);
 
 #define MAX_DELTA_SETTINGS 10
 
