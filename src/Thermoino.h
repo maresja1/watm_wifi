@@ -16,6 +16,10 @@ struct Configuration {
     float debounceLimitC;
     uint8_t underheatingLimit;
     uint8_t overheatingLimit;
+    // linear interpolation (least squares) of the following points:
+    // [boilerTemp - roomTemp, real boilerTemp - boilerTemp]
+    float deltaTempPoly1;
+    float deltaTempPoly0;
 };
 
 typedef struct Button {
