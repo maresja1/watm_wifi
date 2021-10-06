@@ -40,7 +40,6 @@ if (CMAKE_BUILD_TYPE MATCHES "uno")
     include_directories("$ENV{HOME}/.platformio/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/include-fixed")
     include_directories("$ENV{HOME}/.platformio/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/include")
     include_directories("$ENV{HOME}/.platformio/packages/toolchain-atmelavr/avr/include")
-    include_directories("$ENV{HOME}/.platformio/packages/tool-unity")
 
     FILE(GLOB_RECURSE EXTRA_LIB_SOURCES
         ${CMAKE_CURRENT_LIST_DIR}/.pio/libdeps/uno/*.*
