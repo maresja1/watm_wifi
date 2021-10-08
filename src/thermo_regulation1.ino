@@ -9,12 +9,12 @@
 #include "Thermoino.h"
 
 #define DEBUG_LEVEL 2
-#define SERVO_PIN 6
-#define CIRCUIT_RELAY_PIN 7
-#define BTN_1_PIN 5
-#define BTN_2_PIN 4
-#define BTN_3_PIN 3
-#define BTN_4_PIN 2
+#define SERVO_PIN 3
+#define CIRCUIT_RELAY_PIN 2
+#define BTN_1_PIN 6
+#define BTN_2_PIN 7
+#define BTN_3_PIN 4
+#define BTN_4_PIN 5
 #define BOILER_THERM_PIN A0
 #define ROOM_THERM_PIN A1
 
@@ -38,8 +38,8 @@ Configuration config = {
     .underheatingLimit = 45,
     .overheatingLimit = 80,
     // least squares of (1,2), (20,6), (44,12) - y = 0.2333x + 1.612
-    .deltaTempPoly1 = 0.2333f,
-    .deltaTempPoly0 = 1.612f
+    .deltaTempPoly1 = 0.0f, //0.2333f,
+    .deltaTempPoly0 = 0.0f//1.612f
 };
 
 #define MAX_BUFFER_LEN 20
@@ -77,7 +77,7 @@ void setup()
     }
 
     servoInit();
-    analogReference(DEFAULT);
+    analogReference(EXTERNAL);
     pinMode(SERVO_PIN, OUTPUT);
     pinMode(CIRCUIT_RELAY_PIN, OUTPUT);
     pinMode(BTN_1_PIN, INPUT);
@@ -91,6 +91,8 @@ void setup()
     eepromInit();
     Serial.println("Thermoino 1, built:" __DATE__ " " __TIME__ " (" __FILE__ ") - Setup finished.");
 }
+
+void refreshServoAndRelay(const bool circuitRelayOrOverride);
 
 void loop()
 {
@@ -173,15 +175,12 @@ void loop()
         if (buttonsChanged) {
             printStatus();
         }
+        refreshServoAndRelay(circuitRelayOrOverride);
     } else if (lastSettings != settingsSelected) {
         // when menu page changed, refresh
         printStatus();
-    } else if (ticks % 50 == 0 && stateChangedSinceLongRefresh) {
-        // long refresh loop
-        printStatus();
-        servoSetPos(angle);
-        digitalWrite(CIRCUIT_RELAY_PIN, circuitRelayOrOverride);
-        stateChangedSinceLongRefresh = false;
+    } else {
+        refreshServoAndRelay(circuitRelayOrOverride);
     }
 
     if (stateChangedSinceRefresh && ((ticks % 10) == 0)) {
@@ -209,7 +208,17 @@ void loop()
     delay(100);
 }
 
-// (1/T_0) - 25 => 1 / (25 + 237.15) => 0.00381461f
+void refreshServoAndRelay(const bool circuitRelayOrOverride) {
+    if (ticks % 50 == 0 && stateChangedSinceLongRefresh) {
+        // long refresh loop
+        printStatus();
+        servoSetPos(angle);
+        digitalWrite(CIRCUIT_RELAY_PIN, circuitRelayOrOverride);
+        stateChangedSinceLongRefresh = false;
+    }
+}
+
+// (1/T_0); T_0 = 25 C => 1 / (25 + 237.15) => 0.00381461f
 #define THERM_RESIST_SERIAL 10000
 #define THERM_REF_TEMP_INV 0.003354016f
 #define THERM_REF_RESIST 10000
@@ -218,12 +227,14 @@ void loop()
 
 float readTemp(uint8_t pin)
 {
+    analogRead(pin);
     int V_out = analogRead(pin);
     // R_1 = R_2 * ( V_in / V_out - 1 ); V_in = 1023 (3.3V after conv.), R_2 = #THERM_RESIST_SERIAL
-    float R_1 = float(THERM_RESIST_SERIAL * (float(1023 - V_out) / float(V_out)));
+    float R_1 = (float(THERM_RESIST_SERIAL) * float(V_out)) / float (1023 - V_out);
 #if DEBUG_LEVEL > 2
     DEBUG_SER_PRINT(V_out)
     DEBUG_SER_PRINT(R_1)
+    DEBUG_SER_PRINT(THERM_RESIST_SERIAL)
 #endif
     // 1 / T = 1 / T_0 + 1 / B * ln(R_1 / R_0); (1 / T_0) = #THERM_REF_TEMP_INV, R_0 = #THERM_REF_RESIST, B = #THERM_BETA
     float T = float((1 / (THERM_REF_TEMP_INV + (log(R_1 / THERM_REF_RESIST) / THERM_BETA))) - 273.15f);
