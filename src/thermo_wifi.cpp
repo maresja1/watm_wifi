@@ -19,6 +19,7 @@ PubSubClient client(espClient);
 void callback(char *topic, byte *payload, unsigned int length);
 
 float roomTemp = 23.1f;
+float boilerTemp = 23.1f;
 
 void setup() {
     // Set software serial baud to 115200;
@@ -56,12 +57,33 @@ void setup() {
     }
 //    client.subscribe(topic);
     // publish and subscribe
-    client.publish("thermoino/room", "hello emqx");
+    client.publish("thermoino/room", String(roomTemp).c_str());
+    client.publish("thermoino/boiler", String(boilerTemp).c_str());
 }
 
 #define BUFFER_SIZE 40
 char buffer[BUFFER_SIZE];
 void loop() {
-    Serial.readBytesUntil('\n', buffer, )
+    if (Serial.available() > 0) {
+        size_t read = Serial.readBytesUntil('\n', buffer, BUFFER_SIZE);
+        buffer[read] = '\0';
+        const String &sBuffer = String(buffer);
+        if (sBuffer.startsWith("DRQ:")) {
+            const String &commandBuffer = sBuffer.substring(4);
+            if (commandBuffer.startsWith("RT:")) {
+                const String &valueBuffer = commandBuffer.substring(3);
+                roomTemp = strtod(valueBuffer.c_str(), nullptr);
+                client.publish("thermoino/room", String(roomTemp).c_str());
+                Serial.println("Changed room to: " + String(roomTemp));
+            } else if (commandBuffer.startsWith("BT:")) {
+                const String &valueBuffer = commandBuffer.substring(3);
+                boilerTemp = strtod(valueBuffer.c_str(), nullptr);
+                client.publish("thermoino/boiler", String(boilerTemp).c_str());
+                Serial.println("Changed boiler to: " + String(boilerTemp));
+            } else {
+                Serial.println("Unknown command: " + sBuffer);
+            }
+        }
+    }
     client.loop();
 }
