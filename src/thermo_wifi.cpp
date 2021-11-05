@@ -40,6 +40,9 @@ void configModeCallback (WiFiManager *myWiFiManager) {
     Serial.println(myWiFiManager->getConfigPortalSSID());
 }
 
+
+const String &topicBase = String("/thermoino_") + ESP.getChipId();
+
 void setup() {
     // Set software serial baud to 115200;
     Serial.begin(115200);
@@ -125,9 +128,9 @@ void setup() {
     Serial.println("\tmqtt_api_token : " + String(mqtt_api_token));
 
     //save the custom parameters to FS
+    DynamicJsonDocument json(1024);
     if (true) {
         Serial.println("saving config");
-        DynamicJsonDocument json(1024);
         json["mqtt_server"] = mqtt_broker;
         json["mqtt_port"] = mqtt_port;
         json["api_token"] = mqtt_api_token;
@@ -153,8 +156,7 @@ void setup() {
 //        Serial.println("-----------------------");
 //    });
     while (!client.connected()) {
-        String client_id = "esp8266-client-";
-        client_id += String(WiFi.macAddress());
+        const String client_id = "esp8266-client-" + ESP.getChipId();
         Serial.printf("The client %s connects to the public mqtt broker\r\n", client_id.c_str());
         if (client.connect(client_id.c_str(), "thermoino", mqtt_api_token)) {
             Serial.println("Public emqx mqtt broker connected");
@@ -164,12 +166,57 @@ void setup() {
             delay(2000);
         }
     }
+    json.clear();
+    const String &stateTopic = "homeassistant/climate" + topicBase + "/state";
+    const JsonObject &device = json.createNestedObject("device");
+    device["identifiers"] = topicBase.substring(1);
+    device["name"] = "Thermoino";
+    json["state_topic"] = stateTopic;
+
+    json["name"] = "Thermoino Room Temp";
+    json["device_class"] = "temperature";
+    json["unit_of_measurement"] = "°C";
+    json["value_template"] = "{{ value_json.roomTemp }}";
+    json["unique_id"] = topicBase.substring(1) + "-roomTemp";
+    client.beginPublish(("homeassistant/sensor" + topicBase + "-roomTemp/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    json["name"] = "Thermoino Boiler Temp";
+    json["device_class"] = "temperature";
+    json["unit_of_measurement"] = "°C";
+    json["value_template"] = "{{ value_json.boilerTemp }}";
+    json["unique_id"] = topicBase.substring(1) + "-boilerTemp";
+    client.beginPublish(("homeassistant/sensor" + topicBase + "-boilerTemp/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    json["name"] = "Thermoino Angle";
+    json.remove("device_class");
+    json["unit_of_measurement"] = "%";
+    json["value_template"] = "{{ value_json.angle }}";
+    json["unique_id"] = topicBase.substring(1) + "-angle";
+    client.beginPublish(("homeassistant/sensor" + topicBase + "-angle/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    json["name"] = "Thermoino Circuit Relay";
+    json.remove("device_class");
+    json.remove("unit_of_measurement");
+    json["value_template"] = "{{ value_json.circuitRelay }}";
+    json["unique_id"] = topicBase.substring(1) + "-circuitRelay";
+    client.beginPublish(("homeassistant/binary_sensor" + topicBase + "-circuitRelay/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    Serial.print("State topic: " + stateTopic);
 //    client.subscribe(topic);
     // publish and subscribe
 }
 
 #define BUFFER_SIZE 40
-char buffer[BUFFER_SIZE];
+char buffer[BUFFER_SIZE + 1];
+DynamicJsonDocument doc(1024);
 void loop() {
     if (Serial.available() > 0) {
         size_t read = Serial.readBytesUntil('\n', buffer, BUFFER_SIZE);
@@ -180,31 +227,40 @@ void loop() {
             if (commandBuffer.startsWith("RT:")) {
                 const String &valueBuffer = commandBuffer.substring(3);
                 roomTemp = strtod(valueBuffer.c_str(), nullptr);
-                client.publish("thermoino/room", String(roomTemp).c_str());
                 Serial.println("Changed room to: " + String(roomTemp));
             } else if (commandBuffer.startsWith("BT:")) {
                 const String &valueBuffer = commandBuffer.substring(3);
                 boilerTemp = strtod(valueBuffer.c_str(), nullptr);
-                client.publish("thermoino/boiler", String(boilerTemp).c_str());
                 Serial.println("Changed boiler to: " + String(boilerTemp));
             } else if (commandBuffer.startsWith("O:")) {
-                const String &valueBuffer = commandBuffer.substring(3);
+                const String &valueBuffer = commandBuffer.substring(2);
                 angle = atoi(valueBuffer.c_str());
-                client.publish("thermoino/angle", String(angle).c_str());
                 Serial.println("Changed angle to: " + String(boilerTemp));
             } else if (commandBuffer.startsWith("R:")) {
-                const String &valueBuffer = commandBuffer.substring(3);
+                const String &valueBuffer = commandBuffer.substring(2);
                 circuitRelay = valueBuffer.equals("true");
-                client.publish("thermoino/relay", String(circuitRelay).c_str());
                 Serial.println("Changed circuitRelay to: " + String(circuitRelay));
             } else if (commandBuffer.startsWith("HN:")) {
                 const String &valueBuffer = commandBuffer.substring(3);
                 heatNeeded = valueBuffer.equals("true");
-                client.publish("thermoino/heatNeeded", String(heatNeeded).c_str());
-                Serial.println("Changed circuitRelay to: " + String(heatNeeded));
+                Serial.println("Changed heatNeeded to: " + String(heatNeeded));
             } else {
                 Serial.println("Unknown command: " + sBuffer);
             }
+
+            doc.clear();
+            doc["roomTemp"] = roomTemp;
+            doc["boilerTemp"] = boilerTemp;
+            doc["angle"] = angle;
+            doc["circuitRelay"] = circuitRelay;
+            doc["heatNeeded"] = heatNeeded;
+            const String &topicBaseState = "homeassistant/climate" + topicBase + "/state";
+            Serial.println(topicBaseState);
+            client.beginPublish(topicBaseState.c_str(), measureJson(doc), true);
+            serializeJson(doc, client);
+            client.endPublish();
+            serializeJson(doc, Serial);
+            Serial.println();
         }
     }
     client.loop();
