@@ -25,13 +25,18 @@ char mqtt_broker[40];
 char mqtt_port[6] = "8080";
 char mqtt_api_token[34] = "YOUR_API_TOKEN";
 
-void callback(char *topic, byte *payload, unsigned int length);
+void callback(char *topic, uint8_t* payload, unsigned int length);
+
+void sendState();
 
 float roomTemp = 23.1f;
 float boilerTemp = 23.1f;
+float boilerRefTemp = 70.0f;
 int angle = 0;
 bool circuitRelay = false;
 bool heatNeeded = false;
+bool heatOverride = false;
+float heatNeededPWM = 0.0f;
 
 void configModeCallback (WiFiManager *myWiFiManager) {
     Serial.println("Entered config mode");
@@ -42,6 +47,11 @@ void configModeCallback (WiFiManager *myWiFiManager) {
 
 
 const String &topicBase = String("/thermoino_") + ESP.getChipId();
+const String &generalTopicBase = "homeassistant/climate" + topicBase;
+const String &heatNeededSetTopic = String("/heatNeeded/set");
+const String &boilerRefTempSetTopic = String("/boilerRefTemp/set");
+const String &ventOpenSetTopic = String("/ventOpen/set");
+const String &buttonToAutomaticSetTopic = String("/buttonToAutomatic/set");
 
 void setup() {
     // Set software serial baud to 115200;
@@ -145,16 +155,7 @@ void setup() {
         configFile.close();
     }
     client.setServer(mqtt_broker, atoi(mqtt_port));
-//    client.setCallback([](char* topic, uint8_t* payload, unsigned int length) {
-//        Serial.print("Message arrived in topic: ");
-//        Serial.println(topic);
-//        Serial.print("Message:");
-//        for (int i = 0; i < length; i++) {
-//            Serial.print((char) payload[i]);
-//        }
-//        Serial.println();
-//        Serial.println("-----------------------");
-//    });
+    client.setCallback(callback);
     while (!client.connected()) {
         const String client_id = "esp8266-client-" + ESP.getChipId();
         Serial.printf("The client %s connects to the public mqtt broker\r\n", client_id.c_str());
@@ -167,11 +168,11 @@ void setup() {
         }
     }
     json.clear();
-    const String &stateTopic = "homeassistant/climate" + topicBase + "/state";
     const JsonObject &device = json.createNestedObject("device");
-    device["identifiers"] = topicBase.substring(1);
+    device["identifiers"] = String(ESP.getChipId());
     device["name"] = "Thermoino";
-    json["state_topic"] = stateTopic;
+    json["~"] = generalTopicBase;
+    json["stat_t"] = "~/state";
 
     json["name"] = "Thermoino Room Temp";
     json["device_class"] = "temperature";
@@ -190,9 +191,11 @@ void setup() {
     client.beginPublish(("homeassistant/sensor" + topicBase + "-boilerTemp/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
+    serializeJson(json, Serial);
+    Serial.println();
 
     json["name"] = "Thermoino Angle";
-    json.remove("device_class");
+    json["device_class"] = "power_factor";
     json["unit_of_measurement"] = "%";
     json["value_template"] = "{{ value_json.angle }}";
     json["unique_id"] = topicBase.substring(1) + "-angle";
@@ -200,18 +203,65 @@ void setup() {
     serializeJson(json, client);
     client.endPublish();
 
-    json["name"] = "Thermoino Circuit Relay";
     json.remove("device_class");
     json.remove("unit_of_measurement");
+
+    json["name"] = "Thermoino Circuit Relay";
     json["value_template"] = "{{ value_json.circuitRelay }}";
     json["unique_id"] = topicBase.substring(1) + "-circuitRelay";
     client.beginPublish(("homeassistant/binary_sensor" + topicBase + "-circuitRelay/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
 
-    Serial.print("State topic: " + stateTopic);
-//    client.subscribe(topic);
+    json["name"] = "Thermoino Heat demand switch";
+    json["value_template"] = "{{ value_json.heatNeeded }}";
+    json["unique_id"] = topicBase.substring(1) + "-heatNeeded";
+    json["command_topic"] = "~" + heatNeededSetTopic;
+    client.beginPublish(("homeassistant/switch" + topicBase + "-heatNeeded/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    json["name"] = "Thermoino Boiler ref. temp.";
+    json["value_template"] = "{{ value_json.boilerRefTemp }}";
+    json["unit_of_measurement"] = "°C";
+    json["unique_id"] = topicBase.substring(1) + "-boilerRefTemp";
+    json["command_topic"] = "~" + boilerRefTempSetTopic;
+    json["min"] = 45.0f;
+    json["max"] = 90.0f;
+    client.beginPublish(("homeassistant/number" + topicBase + "-boilerRefTemp/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    json["name"] = "Thermoino Vent open set";
+    json["value_template"] = "{{ value_json.angle }}";
+    json["unit_of_measurement"] = "%";
+    json["unique_id"] = topicBase.substring(1) + "-ventOpenSet";
+    json["command_topic"] = "~" + ventOpenSetTopic;
+    json["min"] = 0.0f;
+    json["max"] = 99.0f;
+    client.beginPublish(("homeassistant/number" + topicBase + "-ventOpenSet/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    json.remove("min");
+    json.remove("max");
+    json.remove("unit_of_measurement");
+    json.remove("stat_t");
+    json.remove("value_template");
+
+    json["name"] = "Thermoino Automatic button";
+    json["unique_id"] = topicBase.substring(1) + "-toAutomatic";
+    json["command_topic"] = "~" + buttonToAutomaticSetTopic;
+    client.beginPublish(("homeassistant/button" + topicBase + "-toAutomatic/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    Serial.println("State topic: " + generalTopicBase + "/state");
     // publish and subscribe
+    client.subscribe((generalTopicBase + heatNeededSetTopic).c_str());
+    client.subscribe((generalTopicBase + boilerRefTempSetTopic).c_str());
+    client.subscribe((generalTopicBase + buttonToAutomaticSetTopic).c_str());
+    client.subscribe((generalTopicBase + ventOpenSetTopic).c_str());
 }
 
 #define BUFFER_SIZE 40
@@ -244,24 +294,86 @@ void loop() {
                 const String &valueBuffer = commandBuffer.substring(3);
                 heatNeeded = valueBuffer.equals("true");
                 Serial.println("Changed heatNeeded to: " + String(heatNeeded));
+            } else if (commandBuffer.startsWith("HPWM:")) {
+                const String &valueBuffer = commandBuffer.substring(5);
+                boilerTemp = strtod(valueBuffer.c_str(), nullptr);
+                Serial.println("Changed heatNeededPWM to: " + String(circuitRelay));
             } else {
                 Serial.println("Unknown command: " + sBuffer);
             }
 
-            doc.clear();
-            doc["roomTemp"] = roomTemp;
-            doc["boilerTemp"] = boilerTemp;
-            doc["angle"] = angle;
-            doc["circuitRelay"] = circuitRelay;
-            doc["heatNeeded"] = heatNeeded;
-            const String &topicBaseState = "homeassistant/climate" + topicBase + "/state";
-            Serial.println(topicBaseState);
-            client.beginPublish(topicBaseState.c_str(), measureJson(doc), true);
-            serializeJson(doc, client);
-            client.endPublish();
-            serializeJson(doc, Serial);
-            Serial.println();
+            sendState();
         }
     }
     client.loop();
+}
+
+void sendState() {
+    doc.clear();
+    doc["roomTemp"] = roomTemp;
+    doc["boilerTemp"] = boilerTemp;
+    doc["angle"] = angle;
+    doc["circuitRelay"] = circuitRelay ? "ON" : "OFF";
+    doc["heatNeeded"] = heatNeeded ? "ON" : "OFF";
+    doc["boilerRefTemp"] = boilerRefTemp;
+    const String &topicBaseState = "homeassistant/climate" + topicBase + "/state";
+    Serial.println(topicBaseState);
+    client.beginPublish(topicBaseState.c_str(), measureJson(doc), true);
+    serializeJson(doc, client);
+    client.endPublish();
+    serializeJson(doc, Serial);
+    Serial.println();
+}
+
+
+void callback(char* topic, uint8_t* payload, unsigned int length) {
+    String topicStr = String(topic);
+
+    if (!topicStr.startsWith(generalTopicBase)) return;
+
+    Serial.print("Message arrived [");
+    Serial.print(topic);
+    Serial.print("] ");
+    char payloadCStr[length + 1];
+    for (int i = 0; i < length; i++) {
+        payloadCStr[i] = (char)payload[i];
+    }
+    payloadCStr[length] = '\0';
+    Serial.print(payloadCStr);
+    Serial.println();
+
+    if (topicStr.equals(generalTopicBase + heatNeededSetTopic)) {
+        const bool lastHeatNeeded = heatNeeded;
+        heatNeeded = strcasecmp(payloadCStr, "on") == 0;
+        heatOverride = true;
+        if (lastHeatNeeded != heatNeeded) {
+            Serial.print("DRQ:HNO:");
+            Serial.println(heatOverride ? (heatNeeded ? "2" : "1") : "0");
+            sendState();
+        }
+    }
+
+    if (topicStr.equals(generalTopicBase + boilerRefTempSetTopic)) {
+        const float lastBoilerRefTemp = boilerRefTemp;
+        boilerRefTemp = strtod(payloadCStr, nullptr);
+        if (lastBoilerRefTemp != boilerRefTemp) {
+            Serial.print("DRQ:BRT:");
+            Serial.println(boilerRefTemp);
+            sendState();
+        }
+    }
+
+    if (topicStr.equals(generalTopicBase + ventOpenSetTopic)) {
+        const int32_t ventOpen = atoi(payloadCStr);
+        Serial.print("DRQ:O:");
+        Serial.println(ventOpen);
+    }
+
+    if (topicStr.equals(generalTopicBase + buttonToAutomaticSetTopic)) {
+        const bool pressed = strcasecmp(payloadCStr, "press") == 0;
+        if (pressed) {
+            Serial.print("DRQ:M:A");
+            sendState();
+        }
+    }
 }
