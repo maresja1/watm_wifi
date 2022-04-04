@@ -31,7 +31,7 @@ void sendState();
 
 float roomTemp = 23.1f;
 float boilerTemp = 23.1f;
-float boilerRefTemp = 70.0f;
+uint16_t boilerRefTemp = 70;
 int angle = 0;
 bool circuitRelay = false;
 bool heatNeeded = false;
@@ -52,6 +52,27 @@ const String &heatNeededSetTopic = String("/heatNeeded/set");
 const String &boilerRefTempSetTopic = String("/boilerRefTemp/set");
 const String &ventOpenSetTopic = String("/ventOpen/set");
 const String &buttonToAutomaticSetTopic = String("/buttonToAutomatic/set");
+
+const uint8_t serialLineBufferCapacity = 40;
+uint8_t serialLineBufferIdx = 0;
+char serialLineBuffer[serialLineBufferCapacity];   // an array to store the received data
+boolean serialLineBufferDataReady = false;
+
+void recvWithEndMarker() {
+    if (Serial.available() > 0 && !serialLineBufferDataReady) {
+        const char rc = (char) Serial.read();
+        if (rc != '\r' && rc != '\n') {
+            serialLineBuffer[serialLineBufferIdx++] = rc;
+            if (serialLineBufferIdx >= serialLineBufferCapacity) {
+                serialLineBufferIdx = 0; // overflow
+            }
+        } else {
+            serialLineBuffer[serialLineBufferIdx] = '\0'; // terminate the string
+            serialLineBufferIdx = 0;
+            serialLineBufferDataReady = true;
+        }
+    }
+}
 
 void setup() {
     // Set software serial baud to 115200;
@@ -157,7 +178,7 @@ void setup() {
     client.setServer(mqtt_broker, atoi(mqtt_port));
     client.setCallback(callback);
     while (!client.connected()) {
-        const String client_id = "esp8266-client-" + ESP.getChipId();
+        const String client_id("esp8266-client-" + String(ESP.getChipId()));
         Serial.printf("The client %s connects to the public mqtt broker\r\n", client_id.c_str());
         if (client.connect(client_id.c_str(), "thermoino", mqtt_api_token)) {
             Serial.println("Public emqx mqtt broker connected");
@@ -191,8 +212,16 @@ void setup() {
     client.beginPublish(("homeassistant/sensor" + topicBase + "-boilerTemp/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
-    serializeJson(json, Serial);
-    Serial.println();
+
+    json.remove("device_class");
+    json.remove("unit_of_measurement");
+
+    json["name"] = "Thermoino Heat demand PWM";
+    json["value_template"] = "{{ value_json.heatNeededPWM }}";
+    json["unique_id"] = topicBase.substring(1) + "-heatNeededPWM";
+    client.beginPublish(("homeassistant/sensor" + topicBase + "-heatNeededPWM/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
 
     json["name"] = "Thermoino Angle";
     json["device_class"] = "power_factor";
@@ -268,38 +297,42 @@ void setup() {
 char buffer[BUFFER_SIZE + 1];
 DynamicJsonDocument doc(1024);
 void loop() {
-    if (Serial.available() > 0) {
-        size_t read = Serial.readBytesUntil('\n', buffer, BUFFER_SIZE);
-        buffer[read] = '\0';
-        const String &sBuffer = String(buffer);
+    recvWithEndMarker();
+    if (serialLineBufferDataReady) {
+        serialLineBufferDataReady = false;
+        const String &sBuffer = String(serialLineBuffer);
         if (sBuffer.startsWith("DRQ:")) {
             const String &commandBuffer = sBuffer.substring(4);
             if (commandBuffer.startsWith("RT:")) {
                 const String &valueBuffer = commandBuffer.substring(3);
                 roomTemp = strtod(valueBuffer.c_str(), nullptr);
-                Serial.println("Changed room to: " + String(roomTemp));
+//                Serial.println("Changed room to: " + String(roomTemp));
             } else if (commandBuffer.startsWith("BT:")) {
                 const String &valueBuffer = commandBuffer.substring(3);
                 boilerTemp = strtod(valueBuffer.c_str(), nullptr);
-                Serial.println("Changed boiler to: " + String(boilerTemp));
+//                Serial.println("Changed boiler to: " + String(boilerTemp));
+            } else if (commandBuffer.startsWith("BRT:")) {
+                const String &valueBuffer = commandBuffer.substring(4);
+                boilerRefTemp = atoi(valueBuffer.c_str());
+//                Serial.println("Changed boilerRefTemp to: " + String(boilerRefTemp));
             } else if (commandBuffer.startsWith("O:")) {
                 const String &valueBuffer = commandBuffer.substring(2);
                 angle = atoi(valueBuffer.c_str());
-                Serial.println("Changed angle to: " + String(boilerTemp));
+//                Serial.println("Changed angle to: " + String(angle));
             } else if (commandBuffer.startsWith("R:")) {
                 const String &valueBuffer = commandBuffer.substring(2);
-                circuitRelay = valueBuffer.equals("true");
-                Serial.println("Changed circuitRelay to: " + String(circuitRelay));
+                circuitRelay = atoi(valueBuffer.c_str()) != 0;
+//                Serial.println("Changed circuitRelay to: " + String(circuitRelay));
             } else if (commandBuffer.startsWith("HN:")) {
                 const String &valueBuffer = commandBuffer.substring(3);
                 heatNeeded = valueBuffer.equals("true");
-                Serial.println("Changed heatNeeded to: " + String(heatNeeded));
+//                Serial.println("Changed heatNeeded to: " + String(heatNeeded));
             } else if (commandBuffer.startsWith("HPWM:")) {
                 const String &valueBuffer = commandBuffer.substring(5);
-                boilerTemp = strtod(valueBuffer.c_str(), nullptr);
-                Serial.println("Changed heatNeededPWM to: " + String(circuitRelay));
+                heatNeededPWM = strtod(valueBuffer.c_str(), nullptr);
+//                Serial.println("Changed heatNeededPWM to: " + String(heatNeededPWM));
             } else {
-                Serial.println("Unknown command: " + sBuffer);
+//                Serial.println("Unknown command: " + sBuffer);
             }
 
             sendState();
@@ -315,14 +348,15 @@ void sendState() {
     doc["angle"] = angle;
     doc["circuitRelay"] = circuitRelay ? "ON" : "OFF";
     doc["heatNeeded"] = heatNeeded ? "ON" : "OFF";
+    doc["heatNeededPWM"] = heatNeededPWM;
     doc["boilerRefTemp"] = boilerRefTemp;
     const String &topicBaseState = "homeassistant/climate" + topicBase + "/state";
-    Serial.println(topicBaseState);
+//    Serial.println(topicBaseState);
     client.beginPublish(topicBaseState.c_str(), measureJson(doc), true);
     serializeJson(doc, client);
     client.endPublish();
-    serializeJson(doc, Serial);
-    Serial.println();
+//    serializeJson(doc, Serial);
+//    Serial.println();
 }
 
 
@@ -331,16 +365,16 @@ void callback(char* topic, uint8_t* payload, unsigned int length) {
 
     if (!topicStr.startsWith(generalTopicBase)) return;
 
-    Serial.print("Message arrived [");
-    Serial.print(topic);
-    Serial.print("] ");
+//    Serial.print("Message arrived [");
+//    Serial.print(topic);
+//    Serial.print("] ");
     char payloadCStr[length + 1];
     for (int i = 0; i < length; i++) {
         payloadCStr[i] = (char)payload[i];
     }
     payloadCStr[length] = '\0';
-    Serial.print(payloadCStr);
-    Serial.println();
+//    Serial.print(payloadCStr);
+//    Serial.println();
 
     if (topicStr.equals(generalTopicBase + heatNeededSetTopic)) {
         const bool lastHeatNeeded = heatNeeded;
@@ -349,17 +383,14 @@ void callback(char* topic, uint8_t* payload, unsigned int length) {
         if (lastHeatNeeded != heatNeeded) {
             Serial.print("DRQ:HNO:");
             Serial.println(heatOverride ? (heatNeeded ? "2" : "1") : "0");
-            sendState();
         }
     }
 
     if (topicStr.equals(generalTopicBase + boilerRefTempSetTopic)) {
-        const float lastBoilerRefTemp = boilerRefTemp;
-        boilerRefTemp = strtod(payloadCStr, nullptr);
-        if (lastBoilerRefTemp != boilerRefTemp) {
+        uint16_t boilerRefTempLocal = atoi(payloadCStr);
+        if (boilerRefTempLocal != boilerRefTemp) {
             Serial.print("DRQ:BRT:");
-            Serial.println(boilerRefTemp);
-            sendState();
+            Serial.println(boilerRefTempLocal);
         }
     }
 
