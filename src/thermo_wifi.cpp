@@ -308,6 +308,9 @@ void setup() {
     json["unique_id"] = topicBase.substring(1) + "-boilerPIDKp";
     json["command_topic"] = "~" + boilerPIDKpTopic;
     json["value_template"] = "{{ value_json.boilerPIDKp }}";
+    json["stat_t"] = "~/state";
+    json["min"] = 0.0f;
+    json["max"] = 99.0f;
     client.beginPublish(("homeassistant/number" + topicBase + "-boilerPIDKp/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
@@ -351,6 +354,9 @@ void setup() {
     client.beginPublish(("homeassistant/number" + topicBase + "-relayPIDKd/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
+
+    json.remove("min");
+    json.remove("max");
 
     Serial.println("State topic: " + generalTopicBase + "/state");
     // publish and subscribe
@@ -403,11 +409,11 @@ void loop() {
             OR_PARSE("PID_BL_Kd")
                 boilerPIDKd = strtod(valueBuffer.c_str(), nullptr);
             OR_PARSE("PID_CR_Kp")
-                boilerPIDKp = strtod(valueBuffer.c_str(), nullptr);
+                relayPIDKp = strtod(valueBuffer.c_str(), nullptr);
             OR_PARSE("PID_CR_Ki")
-                boilerPIDKi = strtod(valueBuffer.c_str(), nullptr);
+                relayPIDKi = strtod(valueBuffer.c_str(), nullptr);
             OR_PARSE("PID_CR_Kd")
-                boilerPIDKd = strtod(valueBuffer.c_str(), nullptr);
+                relayPIDKd = strtod(valueBuffer.c_str(), nullptr);
             } else {
 //                Serial.println("Unknown command: " + sBuffer);
             }
