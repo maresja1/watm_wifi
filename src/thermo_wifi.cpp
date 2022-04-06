@@ -37,6 +37,12 @@ bool circuitRelay = false;
 bool heatNeeded = false;
 bool heatOverride = false;
 float heatNeededPWM = 0.0f;
+float boilerPIDKp = 0.0f;
+float boilerPIDKi = 0.0f;
+float boilerPIDKd = 0.0f;
+float relayPIDKp = 0.0f;
+float relayPIDKi = 0.0f;
+float relayPIDKd = 0.0f;
 
 void configModeCallback (WiFiManager *myWiFiManager) {
     Serial.println("Entered config mode");
@@ -52,6 +58,12 @@ const String &heatNeededSetTopic = String("/heatNeeded/set");
 const String &boilerRefTempSetTopic = String("/boilerRefTemp/set");
 const String &ventOpenSetTopic = String("/ventOpen/set");
 const String &buttonToAutomaticSetTopic = String("/buttonToAutomatic/set");
+const String &boilerPIDKpTopic = String("/boilerPIDKp/set");
+const String &boilerPIDKiTopic = String("/boilerPIDKi/set");
+const String &boilerPIDKdTopic = String("/boilerPIDKd/set");
+const String &relayPIDKpTopic = String("/relayPIDKp/set");
+const String &relayPIDKiTopic = String("/relayPIDKi/set");
+const String &relayPIDKdTopic = String("/relayPIDKd/set");
 
 const uint8_t serialLineBufferCapacity = 40;
 uint8_t serialLineBufferIdx = 0;
@@ -285,13 +297,80 @@ void setup() {
     serializeJson(json, client);
     client.endPublish();
 
+//    float boilerPIDKp = 0.0f;
+//    float boilerPIDKi = 0.0f;
+//    float boilerPIDKd = 0.0f;
+//    float relayPIDKp = 0.0f;
+//    float relayPIDKi = 0.0f;
+//    float relayPIDKd = 0.0f;
+
+    json["name"] = "Thermoino Boiler PID Kp";
+    json["unique_id"] = topicBase.substring(1) + "-boilerPIDKp";
+    json["command_topic"] = "~" + boilerPIDKpTopic;
+    json["value_template"] = "{{ value_json.boilerPIDKp }}";
+    client.beginPublish(("homeassistant/number" + topicBase + "-boilerPIDKp/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    json["name"] = "Thermoino Boiler PID Ki";
+    json["unique_id"] = topicBase.substring(1) + "-boilerPIDKi";
+    json["command_topic"] = "~" + boilerPIDKiTopic;
+    json["value_template"] = "{{ value_json.boilerPIDKi }}";
+    client.beginPublish(("homeassistant/number" + topicBase + "-boilerPIDKi/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    json["name"] = "Thermoino Boiler PID Kd";
+    json["unique_id"] = topicBase.substring(1) + "-boilerPIDKd";
+    json["command_topic"] = "~" + boilerPIDKdTopic;
+    json["value_template"] = "{{ value_json.boilerPIDKd }}";
+    client.beginPublish(("homeassistant/number" + topicBase + "-boilerPIDKd/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    json["name"] = "Thermoino Relay PID Kp";
+    json["unique_id"] = topicBase.substring(1) + "-relayPIDKp";
+    json["command_topic"] = "~" + relayPIDKpTopic;
+    json["value_template"] = "{{ value_json.relayPIDKp }}";
+    client.beginPublish(("homeassistant/number" + topicBase + "-relayPIDKp/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    json["name"] = "Thermoino Relay PID Ki";
+    json["unique_id"] = topicBase.substring(1) + "-relayPIDKi";
+    json["command_topic"] = "~" + relayPIDKiTopic;
+    json["value_template"] = "{{ value_json.relayPIDKi }}";
+    client.beginPublish(("homeassistant/number" + topicBase + "-relayPIDKi/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    json["name"] = "Thermoino Relay PID Kd";
+    json["unique_id"] = topicBase.substring(1) + "-relayPIDKd";
+    json["command_topic"] = "~" + relayPIDKdTopic;
+    json["value_template"] = "{{ value_json.relayPIDKd }}";
+    client.beginPublish(("homeassistant/number" + topicBase + "-relayPIDKd/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
     Serial.println("State topic: " + generalTopicBase + "/state");
     // publish and subscribe
     client.subscribe((generalTopicBase + heatNeededSetTopic).c_str());
     client.subscribe((generalTopicBase + boilerRefTempSetTopic).c_str());
     client.subscribe((generalTopicBase + buttonToAutomaticSetTopic).c_str());
     client.subscribe((generalTopicBase + ventOpenSetTopic).c_str());
+
+    client.subscribe((generalTopicBase + boilerPIDKpTopic).c_str());
+    client.subscribe((generalTopicBase + boilerPIDKiTopic).c_str());
+    client.subscribe((generalTopicBase + boilerPIDKdTopic).c_str());
+
+    client.subscribe((generalTopicBase + relayPIDKpTopic).c_str());
+    client.subscribe((generalTopicBase + relayPIDKiTopic).c_str());
+    client.subscribe((generalTopicBase + relayPIDKdTopic).c_str());
 }
+
+#define literal_len(x) (sizeof(x) - 1)
+#define PARSE(x) if (commandBuffer.startsWith(F(x ":"))) { const String &valueBuffer = commandBuffer.substring(literal_len(x ":"));
+#define OR_PARSE(x) } else if (commandBuffer.startsWith(F(x ":"))) { const String &valueBuffer = commandBuffer.substring(literal_len(x ":"));
 
 #define BUFFER_SIZE 40
 char buffer[BUFFER_SIZE + 1];
@@ -303,34 +382,32 @@ void loop() {
         const String &sBuffer = String(serialLineBuffer);
         if (sBuffer.startsWith("DRQ:")) {
             const String &commandBuffer = sBuffer.substring(4);
-            if (commandBuffer.startsWith("RT:")) {
-                const String &valueBuffer = commandBuffer.substring(3);
+            PARSE("RT")
                 roomTemp = strtod(valueBuffer.c_str(), nullptr);
-//                Serial.println("Changed room to: " + String(roomTemp));
-            } else if (commandBuffer.startsWith("BT:")) {
-                const String &valueBuffer = commandBuffer.substring(3);
+            OR_PARSE("BT")
                 boilerTemp = strtod(valueBuffer.c_str(), nullptr);
-//                Serial.println("Changed boiler to: " + String(boilerTemp));
-            } else if (commandBuffer.startsWith("BRT:")) {
-                const String &valueBuffer = commandBuffer.substring(4);
+            OR_PARSE("BRT")
                 boilerRefTemp = atoi(valueBuffer.c_str());
-//                Serial.println("Changed boilerRefTemp to: " + String(boilerRefTemp));
-            } else if (commandBuffer.startsWith("O:")) {
-                const String &valueBuffer = commandBuffer.substring(2);
+            OR_PARSE("O")
                 angle = atoi(valueBuffer.c_str());
-//                Serial.println("Changed angle to: " + String(angle));
-            } else if (commandBuffer.startsWith("R:")) {
-                const String &valueBuffer = commandBuffer.substring(2);
+            OR_PARSE("R")
                 circuitRelay = atoi(valueBuffer.c_str()) != 0;
-//                Serial.println("Changed circuitRelay to: " + String(circuitRelay));
-            } else if (commandBuffer.startsWith("HN:")) {
-                const String &valueBuffer = commandBuffer.substring(3);
+            OR_PARSE("HN")
                 heatNeeded = valueBuffer.equals("true");
-//                Serial.println("Changed heatNeeded to: " + String(heatNeeded));
-            } else if (commandBuffer.startsWith("HPWM:")) {
-                const String &valueBuffer = commandBuffer.substring(5);
+            OR_PARSE("HPWM")
                 heatNeededPWM = strtod(valueBuffer.c_str(), nullptr);
-//                Serial.println("Changed heatNeededPWM to: " + String(heatNeededPWM));
+            OR_PARSE("PID_BL_Kp")
+                boilerPIDKp = strtod(valueBuffer.c_str(), nullptr);
+            OR_PARSE("PID_BL_Ki")
+                boilerPIDKi = strtod(valueBuffer.c_str(), nullptr);
+            OR_PARSE("PID_BL_Kd")
+                boilerPIDKd = strtod(valueBuffer.c_str(), nullptr);
+            OR_PARSE("PID_CR_Kp")
+                boilerPIDKp = strtod(valueBuffer.c_str(), nullptr);
+            OR_PARSE("PID_CR_Ki")
+                boilerPIDKi = strtod(valueBuffer.c_str(), nullptr);
+            OR_PARSE("PID_CR_Kd")
+                boilerPIDKd = strtod(valueBuffer.c_str(), nullptr);
             } else {
 //                Serial.println("Unknown command: " + sBuffer);
             }
@@ -350,6 +427,14 @@ void sendState() {
     doc["heatNeeded"] = heatNeeded ? "ON" : "OFF";
     doc["heatNeededPWM"] = heatNeededPWM;
     doc["boilerRefTemp"] = boilerRefTemp;
+
+    doc["boilerPIDKp"] = boilerPIDKp;
+    doc["boilerPIDKi"] = boilerPIDKi;
+    doc["boilerPIDKd"] = boilerPIDKd;
+    doc["relayPIDKp"] = relayPIDKp;
+    doc["relayPIDKi"] = relayPIDKi;
+    doc["relayPIDKd"] = relayPIDKd;
+
     const String &topicBaseState = "homeassistant/climate" + topicBase + "/state";
 //    Serial.println(topicBaseState);
     client.beginPublish(topicBaseState.c_str(), measureJson(doc), true);
@@ -394,6 +479,54 @@ void callback(char* topic, uint8_t* payload, unsigned int length) {
         }
     }
 
+    if (topicStr.equals(generalTopicBase + boilerPIDKpTopic)) {
+        double boilerPIDKpVal = strtod(payloadCStr, nullptr);
+        if (boilerPIDKpVal != boilerRefTemp) {
+            Serial.print("DRQ:PID_BL_Kp:");
+            Serial.println(boilerPIDKpVal);
+        }
+    }
+
+    if (topicStr.equals(generalTopicBase + boilerPIDKiTopic)) {
+        double boilerPIDKiVal = strtod(payloadCStr, nullptr);
+        if (boilerPIDKiVal != boilerRefTemp) {
+            Serial.print("DRQ:PID_BL_Ki:");
+            Serial.println(boilerPIDKiVal);
+        }
+    }
+
+    if (topicStr.equals(generalTopicBase + boilerPIDKdTopic)) {
+        double boilerPIDKdVal = strtod(payloadCStr, nullptr);
+        if (boilerPIDKdVal != boilerRefTemp) {
+            Serial.print("DRQ:PID_BL_Kd:");
+            Serial.println(boilerPIDKdVal);
+        }
+    }
+
+    if (topicStr.equals(generalTopicBase + relayPIDKpTopic)) {
+        double relayPIDKpVal = strtod(payloadCStr, nullptr);
+        if (relayPIDKpVal != boilerRefTemp) {
+            Serial.print("DRQ:PID_CR_Kp:");
+            Serial.println(relayPIDKpVal);
+        }
+    }
+
+    if (topicStr.equals(generalTopicBase + relayPIDKiTopic)) {
+        double relayPIDKiVal = strtod(payloadCStr, nullptr);
+        if (relayPIDKiVal != boilerRefTemp) {
+            Serial.print("DRQ:PID_CR_Ki:");
+            Serial.println(relayPIDKiVal);
+        }
+    }
+
+    if (topicStr.equals(generalTopicBase + relayPIDKdTopic)) {
+        double relayPIDKdVal = strtod(payloadCStr, nullptr);
+        if (relayPIDKdVal != boilerRefTemp) {
+            Serial.print("DRQ:PID_CR_Kd:");
+            Serial.println(relayPIDKdVal);
+        }
+    }
+
     if (topicStr.equals(generalTopicBase + ventOpenSetTopic)) {
         const int32_t ventOpen = atoi(payloadCStr);
         Serial.print("DRQ:O:");
@@ -403,7 +536,7 @@ void callback(char* topic, uint8_t* payload, unsigned int length) {
     if (topicStr.equals(generalTopicBase + buttonToAutomaticSetTopic)) {
         const bool pressed = strcasecmp(payloadCStr, "press") == 0;
         if (pressed) {
-            Serial.print("DRQ:M:A");
+            Serial.println("DRQ:M:A");
             sendState();
         }
     }
