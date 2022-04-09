@@ -86,6 +86,14 @@ void recvWithEndMarker() {
     }
 }
 
+void switchToConfigMode(WiFiManager &wifiManager) {
+    if(!wifiManager.startConfigPortal()) {
+        Serial.println("config skipped");
+    }
+	ESP.restart();
+    delay(1000);
+}
+
 void setup() {
     // Set software serial baud to 115200;
     Serial.begin(115200);
@@ -139,6 +147,7 @@ void setup() {
 
     //connecting to a mqtt broker
     WiFiManager wifiManager;
+	wifiManager.setConfigPortalTimeout(300);
 
     //set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
     wifiManager.setAPCallback(configModeCallback);
@@ -156,7 +165,7 @@ void setup() {
     if(!wifiManager.autoConnect()) {
         Serial.println("failed to connect and hit timeout");
         //reset and try again, or maybe put it to deep sleep
-        ESP.reset();
+        ESP.restart();
         delay(1000);
     }
     wifi_softap_dhcps_stop();
@@ -189,12 +198,21 @@ void setup() {
     }
     client.setServer(mqtt_broker, atoi(mqtt_port));
     client.setCallback(callback);
+    uint16_t failures = 0;
     while (!client.connected()) {
+		if (++failures > 10) {
+			switchToConfigMode(wifiManager);
+			failures = 0;
+		}
         const String client_id("esp8266-client-" + String(ESP.getChipId()));
         Serial.printf("The client %s connects to the public mqtt broker\r\n", client_id.c_str());
         if (client.connect(client_id.c_str(), "thermoino", mqtt_api_token)) {
             Serial.println("Public emqx mqtt broker connected");
         } else {
+			// state > 0 means more attempts won't help, reset
+			if (client.state() > 0) {
+				switchToConfigMode(wifiManager);
+			}
             Serial.print("failed with state ");
             Serial.print(client.state());
             delay(2000);
