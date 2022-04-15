@@ -86,9 +86,26 @@ void recvWithEndMarker() {
     }
 }
 
-void switchToConfigMode(WiFiManager &wifiManager) {
-    if(!wifiManager.startConfigPortal()) {
-        Serial.println("config skipped");
+void saveConfig(DynamicJsonDocument &json)
+{
+	Serial.println("saving config");
+	json["mqtt_server"] = mqtt_broker;
+	json["mqtt_port"] = mqtt_port;
+	json["api_token"] = mqtt_api_token;
+
+	File configFile = LittleFS.open("/config.json", "w");
+	if (!configFile) {
+		Serial.println("failed to open config file for writing");
+	}
+	serializeJson(json, Serial);
+	serializeJson(json, configFile);
+	configFile.flush();
+	configFile.close();
+}
+
+void switchToConfigMode(WiFiManager &wifiManager, DynamicJsonDocument &json) {
+    if(wifiManager.startConfigPortal()) {
+        saveConfig(json);
     }
 	ESP.restart();
     delay(1000);
@@ -181,27 +198,13 @@ void setup() {
 
     //save the custom parameters to FS
     DynamicJsonDocument json(1024);
-    if (true) {
-        Serial.println("saving config");
-        json["mqtt_server"] = mqtt_broker;
-        json["mqtt_port"] = mqtt_port;
-        json["api_token"] = mqtt_api_token;
-
-        File configFile = LittleFS.open("/config.json", "w");
-        if (!configFile) {
-            Serial.println("failed to open config file for writing");
-        }
-        serializeJson(json, Serial);
-        serializeJson(json, configFile);
-        configFile.flush();
-        configFile.close();
-    }
+    saveConfig(json);
     client.setServer(mqtt_broker, atoi(mqtt_port));
     client.setCallback(callback);
     uint16_t failures = 0;
     while (!client.connected()) {
 		if (++failures > 10) {
-			switchToConfigMode(wifiManager);
+			switchToConfigMode(wifiManager, json);
 			failures = 0;
 		}
         const String client_id("esp8266-client-" + String(ESP.getChipId()));
@@ -211,7 +214,7 @@ void setup() {
         } else {
 			// state > 0 means more attempts won't help, reset
 			if (client.state() > 0) {
-				switchToConfigMode(wifiManager);
+				switchToConfigMode(wifiManager, json);
 			}
             Serial.print("failed with state ");
             Serial.print(client.state());
