@@ -9,6 +9,7 @@ extern "C" {
 #include <PubSubClient.h>
 #include <WiFiManager.h>
 #include <ArduinoJson.h>
+#include <ESP8266mDNS.h>
 
 // WiFi
 const char *ssid = "Nothing2G"; // Enter your WiFi name
@@ -21,9 +22,19 @@ const char *mqtt_password = "";
 WiFiClient espClient;
 PubSubClient client(espClient);
 
-char mqtt_broker[40];
+char mqtt_broker[40] = "unset";
 char mqtt_port[6] = "8080";
 char mqtt_api_token[34] = "YOUR_API_TOKEN";
+const uint32_t BUFFER_MAX_SIZE = 8*1024;
+char buffer[BUFFER_MAX_SIZE] = "";
+DynamicJsonDocument json(1024);
+
+// The extra parameters to be configured (can be either global or just in the setup)
+// After connecting, parameter.getValue() will get you the configured value
+// id/name placeholder/prompt default length
+WiFiManagerParameter *custom_mqtt_server;
+WiFiManagerParameter *custom_mqtt_port;
+WiFiManagerParameter *custom_api_token;
 
 void callback(char *topic, uint8_t* payload, unsigned int length);
 
@@ -65,29 +76,42 @@ const String &relayPIDKpTopic = String("/relayPIDKp/set");
 const String &relayPIDKiTopic = String("/relayPIDKi/set");
 const String &relayPIDKdTopic = String("/relayPIDKd/set");
 
-const uint8_t serialLineBufferCapacity = 40;
-uint8_t serialLineBufferIdx = 0;
-char serialLineBuffer[serialLineBufferCapacity];   // an array to store the received data
-boolean serialLineBufferDataReady = false;
+const uint16_t serialLineBufferCapacity = 1024;
+uint16_t serialLineBufferIdx = 0;
+char serialLineBuffer[serialLineBufferCapacity + 1] = "";   // an array to store the received data
+uint8_t serialLineBufferDataReady = 0x0;
 
 void recvWithEndMarker() {
-    if (Serial.available() > 0 && !serialLineBufferDataReady) {
-        const char rc = (char) Serial.read();
-        if (rc != '\r' && rc != '\n') {
+    while(Serial.available() > 0 && !(serialLineBufferDataReady & 0x1)) {
+        int rc = Serial.read();
+        if (rc < 0) {
+            break;
+        } else if (rc != '\r' && rc != '\n') {
             serialLineBuffer[serialLineBufferIdx++] = rc;
             if (serialLineBufferIdx >= serialLineBufferCapacity) {
                 serialLineBufferIdx = 0; // overflow
+                serialLineBuffer[serialLineBufferCapacity] = 0x0;
+                serialLineBufferDataReady |= 0x2;
             }
         } else {
+            if (serialLineBufferIdx == 0) {
+                // ignore empty lines
+                continue;
+            }
             serialLineBuffer[serialLineBufferIdx] = '\0'; // terminate the string
             serialLineBufferIdx = 0;
-            serialLineBufferDataReady = true;
+            serialLineBufferDataReady |= 0x1;
         }
     }
 }
 
-void saveConfig(DynamicJsonDocument &json)
+void saveConfig()
 {
+    //read updated parameters
+    strcpy(mqtt_broker, custom_mqtt_server->getValue());
+    strcpy(mqtt_port, custom_mqtt_port->getValue());
+    strcpy(mqtt_api_token, custom_api_token->getValue());
+
 	Serial.println("saving config");
 	json["mqtt_server"] = mqtt_broker;
 	json["mqtt_port"] = mqtt_port;
@@ -104,9 +128,7 @@ void saveConfig(DynamicJsonDocument &json)
 }
 
 void switchToConfigMode(WiFiManager &wifiManager, DynamicJsonDocument &json) {
-    if(wifiManager.startConfigPortal()) {
-        saveConfig(json);
-    }
+    wifiManager.startConfigPortal();
 	ESP.restart();
     delay(1000);
 }
@@ -128,22 +150,23 @@ void setup() {
             //file exists, reading and loading
             Serial.println("reading config file");
             File configFile = LittleFS.open("/config.json", "r");
-            if (configFile) {
+            if (configFile && configFile.size() > BUFFER_MAX_SIZE) {
+                Serial.println("FS or file corrupt");
+            } else if (configFile) {
                 Serial.println("opened config file");
                 size_t size = configFile.size();
-                // Allocate a buffer to store contents of the file.
-                std::unique_ptr<char[]> buf(new char[size]);
-
-                configFile.readBytes(buf.get(), size);
-
-                DynamicJsonDocument json(1024);
-                auto deserializeError = deserializeJson(json, buf.get());
+                configFile.readBytes(buffer, size);
+                auto deserializeError = deserializeJson(json, buffer);
                 serializeJson(json, Serial);
                 if ( ! deserializeError ) {
                     Serial.println("\nparsed json");
                     strcpy(mqtt_broker, json["mqtt_server"]);
                     strcpy(mqtt_port, json["mqtt_port"]);
                     strcpy(mqtt_api_token, json["api_token"]);
+                    Serial.print("The values in the file are: ");
+                    Serial.print("\tmqtt_broker : " + String(mqtt_broker));
+                    Serial.print("\tmqtt_port : " + String(mqtt_port));
+                    Serial.println("\tmqtt_api_token : " + String(mqtt_api_token));
                 } else {
                     Serial.println("failed to load json config");
                 }
@@ -155,31 +178,24 @@ void setup() {
     }
     //end read
 
-    // The extra parameters to be configured (can be either global or just in the setup)
-    // After connecting, parameter.getValue() will get you the configured value
-    // id/name placeholder/prompt default length
-    WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_broker, 40);
-    WiFiManagerParameter custom_mqtt_port("port", "mqtt port", mqtt_port, 6);
-    WiFiManagerParameter custom_api_token("apikey", "API token", mqtt_api_token, 32);
-
     //connecting to a mqtt broker
     WiFiManager wifiManager;
 	wifiManager.setConfigPortalTimeout(300);
 
     //set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
     wifiManager.setAPCallback(configModeCallback);
+    wifiManager.setSaveConfigCallback(saveConfig);
 
-    wifiManager.addParameter(&custom_mqtt_server);
-    wifiManager.addParameter(&custom_mqtt_port);
-    wifiManager.addParameter(&custom_api_token);
+    custom_mqtt_server = new WiFiManagerParameter("server", "mqtt server", mqtt_broker, 40);
+    custom_mqtt_port = new WiFiManagerParameter("port", "mqtt port", mqtt_port, 6);
+    custom_api_token = new WiFiManagerParameter("apikey", "API token", mqtt_api_token, 32);
 
-    //fetches ssid and pass and tries to connect
-    //if it does not connect it starts an access point with the specified name
-    //here  "AutoConnectAP"
-    //and goes into a blocking loop awaiting configuration
-    uint8 mode = 0;
+    wifiManager.addParameter(custom_mqtt_server);
+    wifiManager.addParameter(custom_mqtt_port);
+    wifiManager.addParameter(custom_api_token);
+
     wifi_softap_dhcps_start();
-    if(!wifiManager.autoConnect()) {
+    if(!wifiManager.autoConnect("thermoino")) {
         Serial.println("failed to connect and hit timeout");
         //reset and try again, or maybe put it to deep sleep
         ESP.restart();
@@ -187,18 +203,14 @@ void setup() {
     }
     wifi_softap_dhcps_stop();
 
-    //read updated parameters
-    strcpy(mqtt_broker, custom_mqtt_server.getValue());
-    strcpy(mqtt_port, custom_mqtt_port.getValue());
-    strcpy(mqtt_api_token, custom_api_token.getValue());
-    Serial.println("The values in the file are: ");
-    Serial.println("\tmqtt_broker : " + String(mqtt_broker));
-    Serial.println("\tmqtt_port : " + String(mqtt_port));
-    Serial.println("\tmqtt_api_token : " + String(mqtt_api_token));
+    if (!MDNS.begin("thermoino")) {
+        Serial.println("Error setting up MDNS responder!");
+    }
 
-    //save the custom parameters to FS
-    DynamicJsonDocument json(1024);
-    saveConfig(json);
+    IPAddress remote_addr;
+    if (!WiFi.hostByName(mqtt_broker, remote_addr)) {
+        Serial.println("Error resolving mqtt_broker");
+    };
     client.setServer(mqtt_broker, atoi(mqtt_port));
     client.setCallback(callback);
     uint16_t failures = 0;
@@ -208,19 +220,24 @@ void setup() {
 			failures = 0;
 		}
         const String client_id("esp8266-client-" + String(ESP.getChipId()));
-        Serial.printf("The client %s connects to the public mqtt broker\r\n", client_id.c_str());
+        Serial.printf("The client %s (%s) connects to the public mqtt broker\r\n", client_id.c_str(), mqtt_api_token);
         if (client.connect(client_id.c_str(), "thermoino", mqtt_api_token)) {
             Serial.println("Public emqx mqtt broker connected");
         } else {
 			// state > 0 means more attempts won't help, reset
+            Serial.print("failed with state: ");
+            Serial.println(client.state());
 			if (client.state() > 0) {
 				switchToConfigMode(wifiManager, json);
 			}
-            Serial.print("failed with state ");
-            Serial.print(client.state());
             delay(2000);
         }
     }
+
+    // no save allowed pass here
+    delete custom_api_token, custom_mqtt_port, custom_mqtt_server;
+    custom_api_token = custom_mqtt_port = custom_mqtt_server = nullptr;
+
     json.clear();
     const JsonObject &device = json.createNestedObject("device");
     device["identifiers"] = String(ESP.getChipId());
@@ -399,20 +416,27 @@ void setup() {
 #define PARSE(x) if (commandBuffer.startsWith(F(x ":"))) { const String &valueBuffer = commandBuffer.substring(literal_len(x ":"));
 #define OR_PARSE(x) } else if (commandBuffer.startsWith(F(x ":"))) { const String &valueBuffer = commandBuffer.substring(literal_len(x ":"));
 
-#define BUFFER_SIZE 40
-char buffer[BUFFER_SIZE + 1];
-DynamicJsonDocument doc(1024);
+uint64_t lastChange = 0;
+bool hasChange = false;
+
 void loop() {
+    MDNS.update();
     recvWithEndMarker();
-    if (serialLineBufferDataReady) {
-        serialLineBufferDataReady = false;
+    if (serialLineBufferDataReady & 0x2) {
+        serialLineBufferDataReady = 0x0;
+        Serial.println("serial overflow");
+    } else if (serialLineBufferDataReady & 0x1) {
+        serialLineBufferDataReady = 0x0;
         const String &sBuffer = String(serialLineBuffer);
+        // Serial.print("got -> \"");
+        // Serial.print(sBuffer);
+        // Serial.println("\"");
         if (sBuffer.startsWith("DRQ:")) {
             const String &commandBuffer = sBuffer.substring(4);
             PARSE("RT")
-                roomTemp = strtod(valueBuffer.c_str(), nullptr);
+                roomTemp = strtof(valueBuffer.c_str(), nullptr);
             OR_PARSE("BT")
-                boilerTemp = strtod(valueBuffer.c_str(), nullptr);
+                boilerTemp = strtof(valueBuffer.c_str(), nullptr);
             OR_PARSE("BRT")
                 boilerRefTemp = atoi(valueBuffer.c_str());
             OR_PARSE("O")
@@ -422,50 +446,55 @@ void loop() {
             OR_PARSE("HN")
                 heatNeeded = valueBuffer.equals("true");
             OR_PARSE("HPWM")
-                heatNeededPWM = strtod(valueBuffer.c_str(), nullptr);
+                heatNeededPWM = strtof(valueBuffer.c_str(), nullptr);
             OR_PARSE("PID_BL_Kp")
-                boilerPIDKp = strtod(valueBuffer.c_str(), nullptr);
+                boilerPIDKp = strtof(valueBuffer.c_str(), nullptr);
             OR_PARSE("PID_BL_Ki")
-                boilerPIDKi = strtod(valueBuffer.c_str(), nullptr);
+                boilerPIDKi = strtof(valueBuffer.c_str(), nullptr);
             OR_PARSE("PID_BL_Kd")
-                boilerPIDKd = strtod(valueBuffer.c_str(), nullptr);
+                boilerPIDKd = strtof(valueBuffer.c_str(), nullptr);
             OR_PARSE("PID_CR_Kp")
-                relayPIDKp = strtod(valueBuffer.c_str(), nullptr);
+                relayPIDKp = strtof(valueBuffer.c_str(), nullptr);
             OR_PARSE("PID_CR_Ki")
-                relayPIDKi = strtod(valueBuffer.c_str(), nullptr);
+                relayPIDKi = strtof(valueBuffer.c_str(), nullptr);
             OR_PARSE("PID_CR_Kd")
-                relayPIDKd = strtod(valueBuffer.c_str(), nullptr);
+                relayPIDKd = strtof(valueBuffer.c_str(), nullptr);
             } else {
 //                Serial.println("Unknown command: " + sBuffer);
             }
-
-            sendState();
+            hasChange = true;
         }
+    }
+
+    if (hasChange && (millis() - lastChange) > 1000) {
+        sendState();
+        lastChange = millis();
+        hasChange = false;
     }
     client.loop();
 }
 
 void sendState() {
-    doc.clear();
-    doc["roomTemp"] = roomTemp;
-    doc["boilerTemp"] = boilerTemp;
-    doc["angle"] = angle;
-    doc["circuitRelay"] = circuitRelay ? "ON" : "OFF";
-    doc["heatNeeded"] = heatNeeded ? "ON" : "OFF";
-    doc["heatNeededPWM"] = heatNeededPWM;
-    doc["boilerRefTemp"] = boilerRefTemp;
+    json.clear();
+    json["roomTemp"] = serialized(String(roomTemp, 2));
+    json["boilerTemp"] = serialized(String(boilerTemp, 2));
+    json["angle"] = angle;
+    json["circuitRelay"] = circuitRelay ? "ON" : "OFF";
+    json["heatNeeded"] = heatNeeded ? "ON" : "OFF";
+    json["heatNeededPWM"] = heatNeededPWM;
+    json["boilerRefTemp"] = boilerRefTemp;
 
-    doc["boilerPIDKp"] = boilerPIDKp;
-    doc["boilerPIDKi"] = boilerPIDKi;
-    doc["boilerPIDKd"] = boilerPIDKd;
-    doc["relayPIDKp"] = relayPIDKp;
-    doc["relayPIDKi"] = relayPIDKi;
-    doc["relayPIDKd"] = relayPIDKd;
+    json["boilerPIDKp"] = boilerPIDKp;
+    json["boilerPIDKi"] = boilerPIDKi;
+    json["boilerPIDKd"] = boilerPIDKd;
+    json["relayPIDKp"] = relayPIDKp;
+    json["relayPIDKi"] = relayPIDKi;
+    json["relayPIDKd"] = relayPIDKd;
 
     const String &topicBaseState = "homeassistant/climate" + topicBase + "/state";
 //    Serial.println(topicBaseState);
-    client.beginPublish(topicBaseState.c_str(), measureJson(doc), true);
-    serializeJson(doc, client);
+    client.beginPublish(topicBaseState.c_str(), measureJson(json), true);
+    serializeJson(json, client);
     client.endPublish();
 //    serializeJson(doc, Serial);
 //    Serial.println();
@@ -481,7 +510,7 @@ void callback(char* topic, uint8_t* payload, unsigned int length) {
 //    Serial.print(topic);
 //    Serial.print("] ");
     char payloadCStr[length + 1];
-    for (int i = 0; i < length; i++) {
+    for (unsigned int i = 0; i < length; i++) {
         payloadCStr[i] = (char)payload[i];
     }
     payloadCStr[length] = '\0';
