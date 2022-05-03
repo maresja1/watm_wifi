@@ -6,13 +6,14 @@
 #define THERMO_WIFI_H
 
 void configModeCallback (WiFiManager *myWiFiManager);
-void mqttDataCallback(char *topic, uint8_t* payload, unsigned int length);
+void mqttDataCallback(char *topic, const uint8_t* payload, unsigned int length);
 
 void sendState();
 
-void sendCmdVentOpen(const int32_t ventOpen);
-
+void sendCmdVentOpen(uint16_t ventOpen);
 void sendCmdRefreshData();
+void sendRoomReferenceTemp(float boilerRefTempLocal);
+void sendBoilerRefTemp(uint16_t boilerRefTempLocal);
 void sendCmdModeAuto();
 
 void sendCmdBoilerPIDKp(double param);

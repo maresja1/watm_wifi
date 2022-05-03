@@ -12,14 +12,6 @@ extern "C" {
 #include <ESP8266mDNS.h>
 #include "thermo_wifi.h"
 
-// WiFi
-const char *ssid = "Nothing2G"; // Enter your WiFi name
-const char *password = "samfinknajs";  // Enter WiFi password
-
-// MQTT Broker
-const char *mqtt_username = "";
-const char *mqtt_password = "";
-
 WiFiClient espClient;
 PubSubClient client(espClient);
 
@@ -38,14 +30,14 @@ WiFiManagerParameter *custom_mqtt_port;
 WiFiManagerParameter *custom_api_token;
 
 
-float roomTemp = 23.1f;
-float boilerTemp = 23.1f;
-uint16_t boilerRefTemp = 70;
-int angle = 0;
+float roomTemp = 0.0f;
+float roomRefTemp = 0.0f;
+float boilerTemp = 0.0f;
+uint16_t boilerRefTemp = 0;
+uint16_t angle = 0;
 bool circuitRelay = false;
 bool heatNeeded = false;
-bool heatOverride = false;
-float heatNeededPWM = 0.0f;
+float heatNeededPWM = -100.0f; // -100 to detect init data received
 float boilerPIDKp = 0.0f;
 float boilerPIDKi = 0.0f;
 float boilerPIDKd = 0.0f;
@@ -53,10 +45,11 @@ float relayPIDKp = 0.0f;
 float relayPIDKi = 0.0f;
 float relayPIDKd = 0.0f;
 
-const String &topicBase = String("/thermoino_") + ESP.getChipId();
+const String &topicBase = String("/thermoino_") + EspClass::getChipId();
 const String &generalTopicBase = "homeassistant/climate" + topicBase;
 const String &heatNeededSetTopic = String("/heatNeeded/set");
 const String &boilerRefTempSetTopic = String("/boilerRefTemp/set");
+const String &roomRefTempSetTopic = String("/roomRefTemp/set");
 const String &ventOpenSetTopic = String("/ventOpen/set");
 const String &buttonToAutomaticSetTopic = String("/buttonToAutomatic/set");
 const String &boilerPIDKpTopic = String("/boilerPIDKp/set");
@@ -77,7 +70,7 @@ void recvWithEndMarker() {
         if (rc < 0) {
             break;
         } else if (rc != '\r' && rc != '\n') {
-            serialLineBuffer[serialLineBufferIdx++] = rc;
+            serialLineBuffer[serialLineBufferIdx++] = (char)rc;
             if (serialLineBufferIdx >= serialLineBufferCapacity) {
                 serialLineBufferIdx = 0; // overflow
                 serialLineBuffer[serialLineBufferCapacity] = 0x0;
@@ -117,9 +110,9 @@ void saveConfig()
 	configFile.close();
 }
 
-void switchToConfigMode(WiFiManager &wifiManager, DynamicJsonDocument &json) {
+void switchToConfigMode(WiFiManager &wifiManager, DynamicJsonDocument &pJson) {
     wifiManager.startConfigPortal();
-	ESP.restart();
+    EspClass::restart();
     delay(1000);
 }
 
@@ -191,7 +184,7 @@ void setup() {
     if(!wifiManager.autoConnect("thermoino")) {
         Serial.println("failed to connect and hit timeout");
         //reset and try again, or maybe put it to deep sleep
-        ESP.restart();
+        EspClass::restart();
         delay(1000);
     }
     wifi_softap_dhcps_stop();
@@ -204,7 +197,7 @@ void setup() {
     if (!WiFi.hostByName(mqtt_broker, remote_addr)) {
         Serial.println("Error resolving mqtt_broker");
     };
-    client.setServer(mqtt_broker, atoi(mqtt_port));
+    client.setServer(mqtt_broker, strtol(mqtt_port, nullptr, 10));
     client.setCallback(mqttDataCallback);
     uint16_t failures = 0;
     while (!client.connected()) {
@@ -212,7 +205,7 @@ void setup() {
 			switchToConfigMode(wifiManager, json);
 			failures = 0;
 		}
-        const String client_id("esp8266-client-" + String(ESP.getChipId()));
+        const String client_id("esp8266-client-" + String(EspClass::getChipId()));
         if (client.connect(client_id.c_str(), "thermoino", mqtt_api_token)) {
 #ifdef DEBUG
             Serial.printf("The client %s (%s) connected to the mqtt broker\r\n", client_id.c_str(), mqtt_api_token);
@@ -231,12 +224,12 @@ void setup() {
     }
 
     // no save allowed pass here
-    delete custom_api_token, custom_mqtt_port, custom_mqtt_server;
+    delete custom_api_token, delete custom_mqtt_port, delete custom_mqtt_server;
     custom_api_token = custom_mqtt_port = custom_mqtt_server = nullptr;
 
     json.clear();
     const JsonObject &device = json.createNestedObject("device");
-    device["identifiers"] = String(ESP.getChipId());
+    device["identifiers"] = String(EspClass::getChipId());
     device["name"] = "Thermoino";
     json["~"] = generalTopicBase;
     json["stat_t"] = "~/state";
@@ -272,6 +265,7 @@ void setup() {
     json["name"] = "Thermoino Angle";
     json["device_class"] = "power_factor";
     json["unit_of_measurement"] = "%";
+    json["state_class"] = "measurement";
     json["value_template"] = "{{ value_json.angle }}";
     json["unique_id"] = topicBase.substring(1) + "-angle";
     client.beginPublish(("homeassistant/sensor" + topicBase + "-angle/config").c_str(), measureJson(json), true);
@@ -280,6 +274,7 @@ void setup() {
 
     json.remove("device_class");
     json.remove("unit_of_measurement");
+    json.remove("state_class");
 
     json["name"] = "Thermoino Circuit Relay";
     json["value_template"] = "{{ value_json.circuitRelay }}";
@@ -301,9 +296,22 @@ void setup() {
     json["unit_of_measurement"] = "°C";
     json["unique_id"] = topicBase.substring(1) + "-boilerRefTemp";
     json["command_topic"] = "~" + boilerRefTempSetTopic;
+    json["state_class"] = "measurement";
     json["min"] = 45.0f;
     json["max"] = 90.0f;
     client.beginPublish(("homeassistant/number" + topicBase + "-boilerRefTemp/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    json["name"] = "Thermoino Room ref. temp.";
+    json["value_template"] = "{{ value_json.roomRefTemp }}";
+    json["unit_of_measurement"] = "°C";
+    json["unique_id"] = topicBase.substring(1) + "-roomRefTemp";
+    json["command_topic"] = "~" + roomRefTempSetTopic;
+    json["state_class"] = "measurement";
+    json["min"] = 10.0f;
+    json["max"] = 30.0f;
+    client.beginPublish(("homeassistant/number" + topicBase + "-roomRefTemp/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
 
@@ -318,6 +326,7 @@ void setup() {
     serializeJson(json, client);
     client.endPublish();
 
+    json.remove("state_class");
     json.remove("min");
     json.remove("max");
     json.remove("unit_of_measurement");
@@ -344,7 +353,8 @@ void setup() {
     json["value_template"] = "{{ value_json.boilerPIDKp }}";
     json["stat_t"] = "~/state";
     json["min"] = 0.0f;
-    json["max"] = 99.0f;
+    json["max"] = 1000.0f;
+    json["step"] = 0.05f;
     client.beginPublish(("homeassistant/number" + topicBase + "-boilerPIDKp/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
@@ -353,6 +363,7 @@ void setup() {
     json["unique_id"] = topicBase.substring(1) + "-boilerPIDKi";
     json["command_topic"] = "~" + boilerPIDKiTopic;
     json["value_template"] = "{{ value_json.boilerPIDKi }}";
+    json["step"] = 0.001f;
     client.beginPublish(("homeassistant/number" + topicBase + "-boilerPIDKi/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
@@ -369,6 +380,7 @@ void setup() {
     json["unique_id"] = topicBase.substring(1) + "-relayPIDKp";
     json["command_topic"] = "~" + relayPIDKpTopic;
     json["value_template"] = "{{ value_json.relayPIDKp }}";
+    json["step"] = 0.05f;
     client.beginPublish(("homeassistant/number" + topicBase + "-relayPIDKp/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
@@ -377,6 +389,7 @@ void setup() {
     json["unique_id"] = topicBase.substring(1) + "-relayPIDKi";
     json["command_topic"] = "~" + relayPIDKiTopic;
     json["value_template"] = "{{ value_json.relayPIDKi }}";
+    json["step"] = 0.001f;
     client.beginPublish(("homeassistant/number" + topicBase + "-relayPIDKi/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
@@ -436,11 +449,13 @@ void loop() {
             OR_PARSE("BT")
                 boilerTemp = strtof(valueBuffer.c_str(), nullptr);
             OR_PARSE("BRT")
-                boilerRefTemp = atoi(valueBuffer.c_str());
+                boilerRefTemp = strtol(valueBuffer.c_str(), nullptr, 10);
+            OR_PARSE("RRT")
+                roomRefTemp = strtof(valueBuffer.c_str(), nullptr);
             OR_PARSE("O")
-                angle = atoi(valueBuffer.c_str());
+                angle = strtol(valueBuffer.c_str(), nullptr, 10);
             OR_PARSE("R")
-                circuitRelay = atoi(valueBuffer.c_str()) != 0;
+                circuitRelay = strtol(valueBuffer.c_str(), nullptr, 10) != 0;
             OR_PARSE("HN")
                 heatNeeded = valueBuffer.equals("true");
             OR_PARSE("HPWM")
@@ -464,13 +479,18 @@ void loop() {
         }
     }
 
-    if (hasChange && (millis() - lastChange) > 1000) {
-        sendState();
+    if ((millis() - lastChange) > 1000) {
         lastChange = millis();
-        hasChange = false;
+        if (heatNeededPWM < 0.0f) {
+            sendCmdRefreshData();
+        }
+        if (hasChange) {
+            sendState();
+            hasChange = false;
+        }
     }
     if (!client.connected()) {
-        ESP.restart();
+        EspClass::restart();
     }
     client.loop();
 }
@@ -479,11 +499,13 @@ void sendState() {
     json.clear();
     json["roomTemp"] = serialized(String(roomTemp, 2));
     json["boilerTemp"] = serialized(String(boilerTemp, 2));
+    json["roomRefTemp"] = serialized(String(roomRefTemp, 2));
+    json["boilerRefTemp"] = boilerRefTemp;
+
     json["angle"] = angle;
     json["circuitRelay"] = circuitRelay ? "ON" : "OFF";
     json["heatNeeded"] = heatNeeded ? "ON" : "OFF";
     json["heatNeededPWM"] = heatNeededPWM;
-    json["boilerRefTemp"] = boilerRefTemp;
 
     json["boilerPIDKp"] = serialized(String(boilerPIDKp, 4));
     json["boilerPIDKi"] = serialized(String(boilerPIDKi, 4));
@@ -502,7 +524,7 @@ void sendState() {
 }
 
 
-void mqttDataCallback(char* topic, uint8_t* payload, unsigned int length) {
+void mqttDataCallback(char* topic, const uint8_t* payload, unsigned int length) {
     String topicStr = String(topic);
 
     if (!topicStr.startsWith(generalTopicBase)) return;
@@ -526,10 +548,16 @@ void mqttDataCallback(char* topic, uint8_t* payload, unsigned int length) {
     }
 
     if (topicStr.equals(generalTopicBase + boilerRefTempSetTopic)) {
-        uint16_t boilerRefTempLocal = atoi(payloadCStr);
+        uint16_t boilerRefTempLocal = strtol(payloadCStr, nullptr, 10);
         if (boilerRefTempLocal != boilerRefTemp) {
-            Serial.print("DRQ:BRT:");
-            Serial.println(boilerRefTempLocal);
+            sendBoilerRefTemp(boilerRefTempLocal);
+        }
+    }
+
+    if (topicStr.equals(generalTopicBase + roomRefTempSetTopic)) {
+        float roomRefTempVal = strtof(payloadCStr, nullptr);
+        if (roomRefTempVal != roomRefTemp) {
+            sendRoomReferenceTemp(roomRefTempVal);
         }
     }
 
@@ -576,7 +604,7 @@ void mqttDataCallback(char* topic, uint8_t* payload, unsigned int length) {
     }
 
     if (topicStr.equals(generalTopicBase + ventOpenSetTopic)) {
-        const int32_t ventOpen = atoi(payloadCStr);
+        const uint16_t ventOpen = strtol(payloadCStr, nullptr, 10);
         sendCmdVentOpen(ventOpen);
     }
 
@@ -603,14 +631,24 @@ void sendCmdRefreshData() {
     Serial.println("DRQ:INT:SYNC");
 }
 
-void sendCmdVentOpen(const int32_t ventOpen) {
+void sendRoomReferenceTemp(const float roomReferenceTemp) {
+    Serial.print("DRQ:RRT:");
+    Serial.println(roomReferenceTemp);
+}
+
+void sendBoilerRefTemp(const uint16_t boilerRefTempLocal) {
+    Serial.print("DRQ:BRT:");
+    Serial.println(boilerRefTempLocal);
+}
+
+void sendCmdVentOpen(const uint16_t ventOpen) {
     Serial.print("DRQ:O:");
     Serial.println(ventOpen);
 }
 
-void sendCmdHeatOverride(bool heatOverride, bool heatNeeded) {
+void sendCmdHeatOverride(bool heatOverride, bool pHeatNeeded) {
     Serial.print("DRQ:HNO:");
-    Serial.println(heatOverride ? (heatNeeded ? "2" : "1") : "0");
+    Serial.println(heatOverride ? (pHeatNeeded ? "2" : "1") : "0");
 }
 
 void sendCmdBoilerPIDKp(double param) {
