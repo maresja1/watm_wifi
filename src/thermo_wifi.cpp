@@ -409,6 +409,7 @@ void setup() {
     // publish and subscribe
     client.subscribe((generalTopicBase + heatNeededSetTopic).c_str());
     client.subscribe((generalTopicBase + boilerRefTempSetTopic).c_str());
+    client.subscribe((generalTopicBase + roomRefTempSetTopic).c_str());
     client.subscribe((generalTopicBase + buttonToAutomaticSetTopic).c_str());
     client.subscribe((generalTopicBase + ventOpenSetTopic).c_str());
 
