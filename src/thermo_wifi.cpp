@@ -10,6 +10,7 @@ extern "C" {
 #include <WiFiManager.h>
 #include <ArduinoJson.h>
 #include <ESP8266mDNS.h>
+#include "thermo_wifi.h"
 
 // WiFi
 const char *ssid = "Nothing2G"; // Enter your WiFi name
@@ -36,9 +37,6 @@ WiFiManagerParameter *custom_mqtt_server;
 WiFiManagerParameter *custom_mqtt_port;
 WiFiManagerParameter *custom_api_token;
 
-void callback(char *topic, uint8_t* payload, unsigned int length);
-
-void sendState();
 
 float roomTemp = 23.1f;
 float boilerTemp = 23.1f;
@@ -54,14 +52,6 @@ float boilerPIDKd = 0.0f;
 float relayPIDKp = 0.0f;
 float relayPIDKi = 0.0f;
 float relayPIDKd = 0.0f;
-
-void configModeCallback (WiFiManager *myWiFiManager) {
-    Serial.println("Entered config mode");
-    Serial.println(WiFi.softAPIP());
-    //if you used auto generated SSID, print it
-    Serial.println(myWiFiManager->getConfigPortalSSID());
-}
-
 
 const String &topicBase = String("/thermoino_") + ESP.getChipId();
 const String &generalTopicBase = "homeassistant/climate" + topicBase;
@@ -180,6 +170,9 @@ void setup() {
 
     //connecting to a mqtt broker
     WiFiManager wifiManager;
+#ifndef DEBUG
+    wifiManager.setDebugOutput(false);
+#endif
 	wifiManager.setConfigPortalTimeout(300);
 
     //set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
@@ -212,7 +205,7 @@ void setup() {
         Serial.println("Error resolving mqtt_broker");
     };
     client.setServer(mqtt_broker, atoi(mqtt_port));
-    client.setCallback(callback);
+    client.setCallback(mqttDataCallback);
     uint16_t failures = 0;
     while (!client.connected()) {
 		if (++failures > 10) {
@@ -220,14 +213,17 @@ void setup() {
 			failures = 0;
 		}
         const String client_id("esp8266-client-" + String(ESP.getChipId()));
-        Serial.printf("The client %s (%s) connects to the public mqtt broker\r\n", client_id.c_str(), mqtt_api_token);
         if (client.connect(client_id.c_str(), "thermoino", mqtt_api_token)) {
-            Serial.println("Public emqx mqtt broker connected");
+#ifdef DEBUG
+            Serial.printf("The client %s (%s) connected to the mqtt broker\r\n", client_id.c_str(), mqtt_api_token);
+#endif
         } else {
+#ifdef DEBUG
+            Serial.printf("The client %s (%s) ", client_id.c_str(), mqtt_api_token);
+#endif
 			// state > 0 means more attempts won't help, reset
-            Serial.print("failed with state: ");
-            Serial.println(client.state());
-			if (client.state() > 0) {
+            Serial.printf("failed to connect to mqtt, state: %d\r\n", client.state());
+            if (client.state() > 0) {
 				switchToConfigMode(wifiManager, json);
 			}
             delay(2000);
@@ -410,6 +406,8 @@ void setup() {
     client.subscribe((generalTopicBase + relayPIDKpTopic).c_str());
     client.subscribe((generalTopicBase + relayPIDKiTopic).c_str());
     client.subscribe((generalTopicBase + relayPIDKdTopic).c_str());
+
+    sendCmdRefreshData();
 }
 
 #define literal_len(x) (sizeof(x) - 1)
@@ -471,6 +469,9 @@ void loop() {
         lastChange = millis();
         hasChange = false;
     }
+    if (!client.connected()) {
+        ESP.restart();
+    }
     client.loop();
 }
 
@@ -484,12 +485,12 @@ void sendState() {
     json["heatNeededPWM"] = heatNeededPWM;
     json["boilerRefTemp"] = boilerRefTemp;
 
-    json["boilerPIDKp"] = boilerPIDKp;
-    json["boilerPIDKi"] = boilerPIDKi;
-    json["boilerPIDKd"] = boilerPIDKd;
-    json["relayPIDKp"] = relayPIDKp;
-    json["relayPIDKi"] = relayPIDKi;
-    json["relayPIDKd"] = relayPIDKd;
+    json["boilerPIDKp"] = serialized(String(boilerPIDKp, 4));
+    json["boilerPIDKi"] = serialized(String(boilerPIDKi, 4));
+    json["boilerPIDKd"] = serialized(String(boilerPIDKd, 4));
+    json["relayPIDKp"] = serialized(String(relayPIDKp, 4));
+    json["relayPIDKi"] = serialized(String(relayPIDKi, 4));
+    json["relayPIDKd"] = serialized(String(relayPIDKd, 4));
 
     const String &topicBaseState = "homeassistant/climate" + topicBase + "/state";
 //    Serial.println(topicBaseState);
@@ -501,7 +502,7 @@ void sendState() {
 }
 
 
-void callback(char* topic, uint8_t* payload, unsigned int length) {
+void mqttDataCallback(char* topic, uint8_t* payload, unsigned int length) {
     String topicStr = String(topic);
 
     if (!topicStr.startsWith(generalTopicBase)) return;
@@ -518,12 +519,9 @@ void callback(char* topic, uint8_t* payload, unsigned int length) {
 //    Serial.println();
 
     if (topicStr.equals(generalTopicBase + heatNeededSetTopic)) {
-        const bool lastHeatNeeded = heatNeeded;
-        heatNeeded = strcasecmp(payloadCStr, "on") == 0;
-        heatOverride = true;
+        const bool lastHeatNeeded = strcasecmp(payloadCStr, "on") == 0;
         if (lastHeatNeeded != heatNeeded) {
-            Serial.print("DRQ:HNO:");
-            Serial.println(heatOverride ? (heatNeeded ? "2" : "1") : "0");
+            sendCmdHeatOverride(true, lastHeatNeeded);
         }
     }
 
@@ -537,63 +535,110 @@ void callback(char* topic, uint8_t* payload, unsigned int length) {
 
     if (topicStr.equals(generalTopicBase + boilerPIDKpTopic)) {
         double boilerPIDKpVal = strtod(payloadCStr, nullptr);
-        if (boilerPIDKpVal != boilerRefTemp) {
-            Serial.print("DRQ:PID_BL_Kp:");
-            Serial.println(boilerPIDKpVal);
+        if (boilerPIDKpVal != boilerPIDKp) {
+            sendCmdBoilerPIDKp(boilerPIDKpVal);
         }
     }
 
     if (topicStr.equals(generalTopicBase + boilerPIDKiTopic)) {
         double boilerPIDKiVal = strtod(payloadCStr, nullptr);
-        if (boilerPIDKiVal != boilerRefTemp) {
-            Serial.print("DRQ:PID_BL_Ki:");
-            Serial.println(boilerPIDKiVal);
+        if (boilerPIDKiVal != boilerPIDKi) {
+            sendCmdBoilerPIDKi(boilerPIDKiVal);
         }
     }
 
     if (topicStr.equals(generalTopicBase + boilerPIDKdTopic)) {
         double boilerPIDKdVal = strtod(payloadCStr, nullptr);
-        if (boilerPIDKdVal != boilerRefTemp) {
-            Serial.print("DRQ:PID_BL_Kd:");
-            Serial.println(boilerPIDKdVal);
+        if (boilerPIDKdVal != boilerPIDKd) {
+            sendCmdBoilerPIDKd(boilerPIDKdVal);
         }
     }
 
     if (topicStr.equals(generalTopicBase + relayPIDKpTopic)) {
         double relayPIDKpVal = strtod(payloadCStr, nullptr);
-        if (relayPIDKpVal != boilerRefTemp) {
-            Serial.print("DRQ:PID_CR_Kp:");
-            Serial.println(relayPIDKpVal);
+        if (relayPIDKpVal != relayPIDKp) {
+            sendCmdRelayPIDKp(relayPIDKpVal);
         }
     }
 
     if (topicStr.equals(generalTopicBase + relayPIDKiTopic)) {
         double relayPIDKiVal = strtod(payloadCStr, nullptr);
-        if (relayPIDKiVal != boilerRefTemp) {
-            Serial.print("DRQ:PID_CR_Ki:");
-            Serial.println(relayPIDKiVal);
+        if (relayPIDKiVal != relayPIDKi) {
+            sendCmdRelayPIDKi(relayPIDKiVal);
         }
     }
 
     if (topicStr.equals(generalTopicBase + relayPIDKdTopic)) {
         double relayPIDKdVal = strtod(payloadCStr, nullptr);
-        if (relayPIDKdVal != boilerRefTemp) {
-            Serial.print("DRQ:PID_CR_Kd:");
-            Serial.println(relayPIDKdVal);
+        if (relayPIDKdVal != relayPIDKd) {
+            sendCmdRelayPIDKd(relayPIDKdVal);
         }
     }
 
     if (topicStr.equals(generalTopicBase + ventOpenSetTopic)) {
         const int32_t ventOpen = atoi(payloadCStr);
-        Serial.print("DRQ:O:");
-        Serial.println(ventOpen);
+        sendCmdVentOpen(ventOpen);
     }
 
     if (topicStr.equals(generalTopicBase + buttonToAutomaticSetTopic)) {
         const bool pressed = strcasecmp(payloadCStr, "press") == 0;
         if (pressed) {
-            Serial.println("DRQ:M:A");
-            sendState();
+            sendCmdModeAuto();
         }
     }
+}
+
+void configModeCallback (WiFiManager *myWiFiManager) {
+    Serial.println("Entered config mode");
+    Serial.println(WiFi.softAPIP());
+    //if you used auto generated SSID, print it
+    Serial.println(myWiFiManager->getConfigPortalSSID());
+}
+
+void sendCmdModeAuto() {
+    Serial.println("DRQ:M:A");
+}
+
+void sendCmdRefreshData() {
+    Serial.println("DRQ:INT:SYNC");
+}
+
+void sendCmdVentOpen(const int32_t ventOpen) {
+    Serial.print("DRQ:O:");
+    Serial.println(ventOpen);
+}
+
+void sendCmdHeatOverride(bool heatOverride, bool heatNeeded) {
+    Serial.print("DRQ:HNO:");
+    Serial.println(heatOverride ? (heatNeeded ? "2" : "1") : "0");
+}
+
+void sendCmdBoilerPIDKp(double param) {
+    Serial.print("DRQ:PID_BL_Kp:");
+    Serial.println(param, 4);
+}
+
+void sendCmdBoilerPIDKi(double param) {
+    Serial.print("DRQ:PID_BL_Ki:");
+    Serial.println(param, 4);
+}
+
+void sendCmdBoilerPIDKd(double param) {
+    Serial.print("DRQ:PID_BL_Kd:");
+    Serial.println(param, 4);
+}
+
+void sendCmdRelayPIDKp(double param) {
+    Serial.print("DRQ:PID_CR_Kp:");
+    Serial.println(param, 4);
+}
+
+void sendCmdRelayPIDKi(double param) {
+    Serial.print("DRQ:PID_CR_Ki:");
+    Serial.println(param, 4);
+}
+
+void sendCmdRelayPIDKd(double param) {
+    Serial.print("DRQ:PID_CR_Kd:");
+    Serial.println(param, 4);
 }
