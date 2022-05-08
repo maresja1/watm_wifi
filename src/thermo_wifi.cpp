@@ -116,6 +116,8 @@ void switchToConfigMode(WiFiManager &wifiManager, DynamicJsonDocument &pJson) {
     delay(1000);
 }
 
+void jsonDiscoverPreset(JsonDocument &json);
+
 void setup() {
     // Set software serial baud to 115200;
     Serial.begin(115200);
@@ -227,13 +229,7 @@ void setup() {
     delete custom_api_token, delete custom_mqtt_port, delete custom_mqtt_server;
     custom_api_token = custom_mqtt_port = custom_mqtt_server = nullptr;
 
-    json.clear();
-    const JsonObject &device = json.createNestedObject("device");
-    device["identifiers"] = String(EspClass::getChipId());
-    device["name"] = "Thermoino";
-    json["~"] = generalTopicBase;
-    json["stat_t"] = "~/state";
-
+    jsonDiscoverPreset(json);
     json["name"] = "Thermoino Room Temp";
     json["device_class"] = "temperature";
     json["unit_of_measurement"] = "°C";
@@ -243,6 +239,7 @@ void setup() {
     serializeJson(json, client);
     client.endPublish();
 
+    jsonDiscoverPreset(json);
     json["name"] = "Thermoino Boiler Temp";
     json["device_class"] = "temperature";
     json["unit_of_measurement"] = "°C";
@@ -252,9 +249,7 @@ void setup() {
     serializeJson(json, client);
     client.endPublish();
 
-    json.remove("device_class");
-    json.remove("unit_of_measurement");
-
+    jsonDiscoverPreset(json);
     json["name"] = "Thermoino Heat demand PWM";
     json["value_template"] = "{{ value_json.heatNeededPWM }}";
     json["unique_id"] = topicBase.substring(1) + "-heatNeededPWM";
@@ -262,6 +257,7 @@ void setup() {
     serializeJson(json, client);
     client.endPublish();
 
+    jsonDiscoverPreset(json);
     json["name"] = "Thermoino Angle";
     json["device_class"] = "power_factor";
     json["unit_of_measurement"] = "%";
@@ -272,10 +268,7 @@ void setup() {
     serializeJson(json, client);
     client.endPublish();
 
-    json.remove("device_class");
-    json.remove("unit_of_measurement");
-    json.remove("state_class");
-
+    jsonDiscoverPreset(json);
     json["name"] = "Thermoino Circuit Relay";
     json["value_template"] = "{{ value_json.circuitRelay }}";
     json["unique_id"] = topicBase.substring(1) + "-circuitRelay";
@@ -283,6 +276,7 @@ void setup() {
     serializeJson(json, client);
     client.endPublish();
 
+    jsonDiscoverPreset(json);
     json["name"] = "Thermoino Heat demand switch";
     json["value_template"] = "{{ value_json.heatNeeded }}";
     json["unique_id"] = topicBase.substring(1) + "-heatNeeded";
@@ -291,6 +285,7 @@ void setup() {
     serializeJson(json, client);
     client.endPublish();
 
+    jsonDiscoverPreset(json);
     json["name"] = "Thermoino Boiler ref. temp.";
     json["value_template"] = "{{ value_json.boilerRefTemp }}";
     json["unit_of_measurement"] = "°C";
@@ -303,6 +298,7 @@ void setup() {
     serializeJson(json, client);
     client.endPublish();
 
+    jsonDiscoverPreset(json);
     json["name"] = "Thermoino Room ref. temp.";
     json["value_template"] = "{{ value_json.roomRefTemp }}";
     json["unit_of_measurement"] = "°C";
@@ -315,6 +311,7 @@ void setup() {
     serializeJson(json, client);
     client.endPublish();
 
+    jsonDiscoverPreset(json);
     json["name"] = "Thermoino Vent open set";
     json["value_template"] = "{{ value_json.angle }}";
     json["unit_of_measurement"] = "%";
@@ -326,13 +323,7 @@ void setup() {
     serializeJson(json, client);
     client.endPublish();
 
-    json.remove("state_class");
-    json.remove("min");
-    json.remove("max");
-    json.remove("unit_of_measurement");
-    json.remove("stat_t");
-    json.remove("value_template");
-
+    jsonDiscoverPreset(json);
     json["name"] = "Thermoino Automatic button";
     json["unique_id"] = topicBase.substring(1) + "-toAutomatic";
     json["command_topic"] = "~" + buttonToAutomaticSetTopic;
@@ -347,6 +338,7 @@ void setup() {
 //    float relayPIDKi = 0.0f;
 //    float relayPIDKd = 0.0f;
 
+    jsonDiscoverPreset(json);
     json["name"] = "Thermoino Boiler PID Kp";
     json["unique_id"] = topicBase.substring(1) + "-boilerPIDKp";
     json["command_topic"] = "~" + boilerPIDKpTopic;
@@ -359,51 +351,67 @@ void setup() {
     serializeJson(json, client);
     client.endPublish();
 
+    jsonDiscoverPreset(json);
     json["name"] = "Thermoino Boiler PID Ki";
     json["unique_id"] = topicBase.substring(1) + "-boilerPIDKi";
     json["command_topic"] = "~" + boilerPIDKiTopic;
     json["value_template"] = "{{ value_json.boilerPIDKi }}";
+    json["min"] = 0.0f;
+    json["max"] = 1000.0f;
     json["step"] = 0.001f;
     client.beginPublish(("homeassistant/number" + topicBase + "-boilerPIDKi/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
 
+    jsonDiscoverPreset(json);
     json["name"] = "Thermoino Boiler PID Kd";
     json["unique_id"] = topicBase.substring(1) + "-boilerPIDKd";
     json["command_topic"] = "~" + boilerPIDKdTopic;
     json["value_template"] = "{{ value_json.boilerPIDKd }}";
+    json["min"] = 0.0f;
+    json["max"] = 1000.0f;
+    json["step"] = 0.001f;
     client.beginPublish(("homeassistant/number" + topicBase + "-boilerPIDKd/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
 
+    jsonDiscoverPreset(json);
     json["name"] = "Thermoino Relay PID Kp";
     json["unique_id"] = topicBase.substring(1) + "-relayPIDKp";
     json["command_topic"] = "~" + relayPIDKpTopic;
     json["value_template"] = "{{ value_json.relayPIDKp }}";
+    json["min"] = 0.0f;
+    json["max"] = 1000.0f;
     json["step"] = 0.05f;
     client.beginPublish(("homeassistant/number" + topicBase + "-relayPIDKp/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
 
+    jsonDiscoverPreset(json);
     json["name"] = "Thermoino Relay PID Ki";
     json["unique_id"] = topicBase.substring(1) + "-relayPIDKi";
     json["command_topic"] = "~" + relayPIDKiTopic;
     json["value_template"] = "{{ value_json.relayPIDKi }}";
+    json["min"] = 0.0f;
+    json["max"] = 1000.0f;
     json["step"] = 0.001f;
     client.beginPublish(("homeassistant/number" + topicBase + "-relayPIDKi/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
 
+    jsonDiscoverPreset(json);
     json["name"] = "Thermoino Relay PID Kd";
     json["unique_id"] = topicBase.substring(1) + "-relayPIDKd";
     json["command_topic"] = "~" + relayPIDKdTopic;
     json["value_template"] = "{{ value_json.relayPIDKd }}";
+    json["min"] = 0.0f;
+    json["max"] = 1000.0f;
+    json["step"] = 0.001f;
     client.beginPublish(("homeassistant/number" + topicBase + "-relayPIDKd/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
 
-    json.remove("min");
-    json.remove("max");
+    json.clear();
 
     Serial.println("State topic: " + generalTopicBase + "/state");
     // publish and subscribe
@@ -422,6 +430,15 @@ void setup() {
     client.subscribe((generalTopicBase + relayPIDKdTopic).c_str());
 
     sendCmdRefreshData();
+}
+
+void jsonDiscoverPreset(JsonDocument &json) {
+    json.clear();
+    const JsonObject &device = json.createNestedObject("device");
+    device["identifiers"] = String(EspClass::getChipId());
+    device["name"] = "Thermoino";
+    json["~"] = generalTopicBase;
+    json["stat_t"] = "~/state";
 }
 
 #define literal_len(x) (sizeof(x) - 1)
