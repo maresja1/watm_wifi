@@ -9,6 +9,7 @@ void configModeCallback (WiFiManager *myWiFiManager);
 void mqttDataCallback(char *topic, const uint8_t* payload, unsigned int length);
 
 void sendState();
+void parseThreeFloats(const String& sBuffer, float *dFirst, float *dSecond, float *dThree);
 
 void sendCmdVentOpen(uint16_t ventOpen);
 void sendCmdRefreshData();

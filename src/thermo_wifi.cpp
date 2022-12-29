@@ -45,6 +45,13 @@ float relayPIDKp = 0.0f;
 float relayPIDKi = 0.0f;
 float relayPIDKd = 0.0f;
 
+float boilerPIDVp = 0.0f;
+float boilerPIDVi = 0.0f;
+float boilerPIDVd = 0.0f;
+float relayPIDVp = 0.0f;
+float relayPIDVi = 0.0f;
+float relayPIDVd = 0.0f;
+
 const String &topicBase = String("/thermoino_") + EspClass::getChipId();
 const String &generalTopicBase = "homeassistant/climate" + topicBase;
 const String &heatNeededSetTopic = String("/heatNeeded/set");
@@ -411,6 +418,73 @@ void setup() {
     serializeJson(json, client);
     client.endPublish();
 
+    jsonDiscoverPreset(json);
+    json["name"] = "Thermoino Boiler PID Vp";
+    json["unique_id"] = topicBase.substring(1) + "-boilerPIDVp";
+    json["value_template"] = "{{ value_json.boilerPIDVp }}";
+    json["stat_t"] = "~/state";
+    json["min"] = 0.0f;
+    json["max"] = 1000.0f;
+    json["step"] = 0.05f;
+    client.beginPublish(("homeassistant/number" + topicBase + "-boilerPIDVp/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    jsonDiscoverPreset(json);
+    json["name"] = "Thermoino Boiler PID Vi";
+    json["unique_id"] = topicBase.substring(1) + "-boilerPIDVi";
+    json["value_template"] = "{{ value_json.boilerPIDVi }}";
+    json["min"] = 0.0f;
+    json["max"] = 1000.0f;
+    json["step"] = 0.001f;
+    client.beginPublish(("homeassistant/number" + topicBase + "-boilerPIDVi/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    jsonDiscoverPreset(json);
+    json["name"] = "Thermoino Boiler PID Vd";
+    json["unique_id"] = topicBase.substring(1) + "-boilerPIDVd";
+    json["value_template"] = "{{ value_json.boilerPIDVd }}";
+    json["min"] = 0.0f;
+    json["max"] = 1000.0f;
+    json["step"] = 0.001f;
+    client.beginPublish(("homeassistant/number" + topicBase + "-boilerPIDVd/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    jsonDiscoverPreset(json);
+    json["name"] = "Thermoino Relay PID Vp";
+    json["unique_id"] = topicBase.substring(1) + "-relayPIDVp";
+    json["value_template"] = "{{ value_json.relayPIDVp }}";
+    json["min"] = 0.0f;
+    json["max"] = 1000.0f;
+    json["step"] = 0.05f;
+    client.beginPublish(("homeassistant/number" + topicBase + "-relayPIDVp/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    jsonDiscoverPreset(json);
+    json["name"] = "Thermoino Relay PID Vi";
+    json["unique_id"] = topicBase.substring(1) + "-relayPIDVi";
+    json["value_template"] = "{{ value_json.relayPIDVi }}";
+    json["min"] = 0.0f;
+    json["max"] = 1000.0f;
+    json["step"] = 0.001f;
+    client.beginPublish(("homeassistant/number" + topicBase + "-relayPIDVi/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    jsonDiscoverPreset(json);
+    json["name"] = "Thermoino Relay PID Vd";
+    json["unique_id"] = topicBase.substring(1) + "-relayPIDVd";
+    json["value_template"] = "{{ value_json.relayPIDVd }}";
+    json["min"] = 0.0f;
+    json["max"] = 1000.0f;
+    json["step"] = 0.001f;
+    client.beginPublish(("homeassistant/number" + topicBase + "-relayPIDVd/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
     json.clear();
 
     Serial.println("State topic: " + generalTopicBase + "/state");
@@ -446,6 +520,7 @@ void jsonDiscoverPreset(JsonDocument &json) {
 #define OR_PARSE(x) } else if (commandBuffer.startsWith(F(x ":"))) { const String &valueBuffer = commandBuffer.substring(literal_len(x ":"));
 
 uint64_t lastChange = 0;
+uint64_t lastRefresh = 0;
 bool hasChange = false;
 
 void loop() {
@@ -490,6 +565,12 @@ void loop() {
                 relayPIDKi = strtof(valueBuffer.c_str(), nullptr);
             OR_PARSE("PID_CR_Kd")
                 relayPIDKd = strtof(valueBuffer.c_str(), nullptr);
+            OR_PARSE("PID_CR_Kd")
+                relayPIDKd = strtof(valueBuffer.c_str(), nullptr);
+            OR_PARSE("H_PID")
+                parseThreeFloats(valueBuffer, &relayPIDVp, &relayPIDVd, &relayPIDVi);
+            OR_PARSE("V_PID")
+                parseThreeFloats(valueBuffer, &boilerPIDVp, &boilerPIDVd, &boilerPIDVi);
             } else {
 //                Serial.println("Unknown command: " + sBuffer);
             }
@@ -507,10 +588,24 @@ void loop() {
             hasChange = false;
         }
     }
+
+    if ((millis() - lastRefresh) > 10000) {
+        lastRefresh = millis();
+        sendCmdRefreshData();
+    }
+
     if (!client.connected()) {
         EspClass::restart();
     }
     client.loop();
+}
+
+void parseThreeFloats(const String& sBuffer, float *dFirst, float *dSecond, float *dThree) {
+    const char *string = sBuffer.c_str();
+    char *last;
+    *dFirst = strtof(string, &last);
+    *dSecond = strtof(last, &last);
+    *dThree = strtof(last, nullptr);
 }
 
 void sendState() {
@@ -532,6 +627,13 @@ void sendState() {
     json["relayPIDKi"] = serialized(String(relayPIDKi, 4));
     json["relayPIDKd"] = serialized(String(relayPIDKd, 4));
 
+    json["boilerPIDVp"] = serialized(String(boilerPIDVp, 4));
+    json["boilerPIDVi"] = serialized(String(boilerPIDVi, 4));
+    json["boilerPIDVd"] = serialized(String(boilerPIDVd, 4));
+    json["relayPIDVp"] = serialized(String(relayPIDVp, 4));
+    json["relayPIDVi"] = serialized(String(relayPIDVi, 4));
+    json["relayPIDVd"] = serialized(String(relayPIDVd, 4));
+    
     const String &topicBaseState = "homeassistant/climate" + topicBase + "/state";
 //    Serial.println(topicBaseState);
     client.beginPublish(topicBaseState.c_str(), measureJson(json), true);
