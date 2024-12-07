@@ -29,8 +29,10 @@ WiFiManagerParameter *custom_mqtt_server;
 WiFiManagerParameter *custom_mqtt_port;
 WiFiManagerParameter *custom_api_token;
 
-uint64_t volume = 0;
-uint32_t volumeFlow = 0;
+double volume = 0;
+float volumeFlow = 0;
+uint64_t volumePulses = 0;
+uint32_t volumeFlowPulses = 0;
 
 const String &topicBase = String("/watm_") + EspClass::getChipId();
 const String &generalTopicBase = "homeassistant/climate" + topicBase;
@@ -208,7 +210,7 @@ void setup() {
     jsonDiscoverPreset(json);
     json["name"] = "watm Volume";
     json["device_class"] = "volume";
-    json["unit_of_measurement"] = "mL";
+    json["unit_of_measurement"] = "L";
     json["value_template"] = "{{ value_json.volume }}";
     json["unique_id"] = topicBase.substring(1) + "-volume";
     client.beginPublish(("homeassistant/sensor" + topicBase + "-volume/config").c_str(), measureJson(json), true);
@@ -218,10 +220,26 @@ void setup() {
     jsonDiscoverPreset(json);
     json["name"] = "watm Volume Flow";
     json["device_class"] = "volume_flow_rate";
-    json["unit_of_measurement"] = "mL/s";
+    json["unit_of_measurement"] = "L/min";
     json["value_template"] = "{{ value_json.volumeFlow }}";
     json["unique_id"] = topicBase.substring(1) + "-volumeFlow";
     client.beginPublish(("homeassistant/sensor" + topicBase + "-volumeFlow/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    jsonDiscoverPreset(json);
+    json["name"] = "watm Volume Flow Pulses";
+    json["value_template"] = "{{ value_json.volumeFlowPulses }}";
+    json["unique_id"] = topicBase.substring(1) + "-volumeFlowPulses";
+    client.beginPublish(("homeassistant/sensor" + topicBase + "-volumeFlowPulses/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    jsonDiscoverPreset(json);
+    json["name"] = "watm Volume Pulses";
+    json["value_template"] = "{{ value_json.volumePulses }}";
+    json["unique_id"] = topicBase.substring(1) + "-volumePulses";
+    client.beginPublish(("homeassistant/sensor" + topicBase + "-volumePulses/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
 
@@ -263,10 +281,14 @@ void loop() {
         // Serial.println("\"");
         if (sBuffer.startsWith("DRQ:")) {
             const String &commandBuffer = sBuffer.substring(4);
-            PARSE("VI")
-                volume = strtoull(valueBuffer.c_str(), nullptr, 10);
+            PARSE("V")
+                volume = strtod(valueBuffer.c_str(), nullptr);
+            OR_PARSE("VP")
+                volumePulses = strtoull(valueBuffer.c_str(), nullptr, 10);
             OR_PARSE("VF")
-                volumeFlow = strtoull(valueBuffer.c_str(), nullptr, 10);
+                volumeFlow = strtof(valueBuffer.c_str(), nullptr);
+            OR_PARSE("VFP")
+                volumeFlowPulses = strtoul(valueBuffer.c_str(), nullptr, 10);
             } else {
 //                Serial.println("Unknown command: " + sBuffer);
             }
@@ -281,11 +303,11 @@ void loop() {
             hasChange = false;
         }
     }
-    //
-    // if (millis() - lastRefresh > 10000) {
-    //     lastRefresh = millis();
-    //     sendCmdRefreshData();
-    // }
+
+     if (millis() - lastRefresh > 60000) {
+         lastRefresh = millis();
+         sendCmdRefreshData();
+     }
 
     if (!client.connected()) {
         EspClass::restart();
@@ -295,8 +317,10 @@ void loop() {
 
 void sendState() {
     json.clear();
-    json["volume"] = serialized(String(volume));
-    json["volumeFlow"] = serialized(String(volumeFlow));
+    json["volume"] = serialized(String(volume, 2));
+    json["volumePulses"] = serialized(String(volumePulses));
+    json["volumeFlow"] = serialized(String(volumeFlow, 2));
+    json["volumeFlowPulses"] = serialized(String(volumeFlowPulses));
 //    Serial.println(topicBaseState);
     client.beginPublish(topicBaseState.c_str(), measureJson(json), true);
     serializeJson(json, client);
