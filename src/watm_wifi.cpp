@@ -37,6 +37,9 @@ uint32_t volumeFlowPulses = 0;
 const String &topicBase = String("/watm_") + EspClass::getChipId();
 const String &generalTopicBase = "homeassistant/climate" + topicBase;
 const String &topicBaseState = generalTopicBase + "/state";
+const String &buttonResetTopic = String("/reset/set");
+const String &qDivTopic = String("/qDiv/set");
+const String &qOffsetTopic = String("/qOffset/set");
 
 const uint16_t serialLineBufferCapacity = 1024;
 uint16_t serialLineBufferIdx = 0;
@@ -179,6 +182,7 @@ void setup() {
         Serial.println("Error resolving mqtt_broker");
     };
     client.setServer(mqtt_broker, strtol(mqtt_port, nullptr, 10));
+    client.setCallback(mqttDataCallback);
     uint16_t failures = 0;
     while (!client.connected()) {
 		if (++failures > 10) {
@@ -230,24 +234,61 @@ void setup() {
     jsonDiscoverPreset(json);
     json["name"] = "watm Volume Flow Pulses";
     json["value_template"] = "{{ value_json.volumeFlowPulses }}";
+    json["state_class"] = "measurement";
     json["unique_id"] = topicBase.substring(1) + "-volumeFlowPulses";
-    client.beginPublish(("homeassistant/sensor" + topicBase + "-volumeFlowPulses/config").c_str(), measureJson(json), true);
+    client.beginPublish(("homeassistant/number" + topicBase + "-volumeFlowPulses/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
 
     jsonDiscoverPreset(json);
     json["name"] = "watm Volume Pulses";
     json["value_template"] = "{{ value_json.volumePulses }}";
+    json["state_class"] = "measurement";
     json["unique_id"] = topicBase.substring(1) + "-volumePulses";
-    client.beginPublish(("homeassistant/sensor" + topicBase + "-volumePulses/config").c_str(), measureJson(json), true);
+    client.beginPublish(("homeassistant/number" + topicBase + "-volumePulses/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    jsonDiscoverPreset(json);
+    json["name"] = "watm qDiv";
+    json["value_template"] = "{{ value_json.qDiv }}";
+    json["unique_id"] = topicBase.substring(1) + "-qDiv";
+    json["command_topic"] = "~" + qDivTopic;
+    json["suggested_display_precision"] = 1;
+    json["min"] = 0;
+    json["max"] = 12;
+    json["step"] = 0.1f;
+    client.beginPublish(("homeassistant/number" + topicBase + "-qDiv/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    jsonDiscoverPreset(json);
+    json["name"] = "watm qOffset";
+    json["value_template"] = "{{ value_json.qOffset }}";
+    json["unique_id"] = topicBase.substring(1) + "-qOffset";
+    json["command_topic"] = "~" + qOffsetTopic;
+    json["suggested_display_precision"] = 1;
+    json["min"] = -10;
+    json["max"] = 10;
+    json["step"] = 0.1f;
+    client.beginPublish(("homeassistant/number" + topicBase + "-qOffset/config").c_str(), measureJson(json), true);
+    serializeJson(json, client);
+    client.endPublish();
+
+    jsonDiscoverPreset(json);
+    json["name"] = "watm buttonReset";
+    json["unique_id"] = topicBase.substring(1) + "-buttonReset";
+    json["command_topic"] = "~" + buttonResetTopic;
+    client.beginPublish(("homeassistant/button" + topicBase + "-buttonReset/config").c_str(), measureJson(json), true);
     serializeJson(json, client);
     client.endPublish();
 
     json.clear();
 
+    client.subscribe((generalTopicBase + buttonResetTopic).c_str());
+    client.subscribe((generalTopicBase + qDivTopic).c_str());
+    client.subscribe((generalTopicBase + qOffsetTopic).c_str());
     Serial.println("State topic: " + topicBaseState);
-
-    sendCmdRefreshData();
 }
 
 void jsonDiscoverPreset(JsonDocument &json) {
@@ -265,6 +306,10 @@ void jsonDiscoverPreset(JsonDocument &json) {
 
 uint64_t lastChange = 0;
 uint64_t lastRefresh = 0;
+
+float qOffset = 0.0f;
+float qDiv = 6.6f;
+
 bool hasChange = false;
 
 void loop() {
@@ -289,6 +334,10 @@ void loop() {
                 volumeFlow = strtof(valueBuffer.c_str(), nullptr);
             OR_PARSE("VFP")
                 volumeFlowPulses = strtoul(valueBuffer.c_str(), nullptr, 10);
+            OR_PARSE("QO")
+                qOffset = strtof(valueBuffer.c_str(), nullptr);
+            OR_PARSE("QD")
+                qDiv = strtof(valueBuffer.c_str(), nullptr);
             } else {
 //                Serial.println("Unknown command: " + sBuffer);
             }
@@ -321,6 +370,8 @@ void sendState() {
     json["volumePulses"] = serialized(String(volumePulses));
     json["volumeFlow"] = serialized(String(volumeFlow, 2));
     json["volumeFlowPulses"] = serialized(String(volumeFlowPulses));
+    json["qDiv"] = serialized(String(qDiv, 2));
+    json["qOffset"] = serialized(String(qOffset, 2));
 //    Serial.println(topicBaseState);
     client.beginPublish(topicBaseState.c_str(), measureJson(json), true);
     serializeJson(json, client);
@@ -338,4 +389,58 @@ void configModeCallback (WiFiManager *myWiFiManager) {
 
 void sendCmdRefreshData() {
     Serial.println("DRQ:INT:SYNC");
+}
+
+void sendCmdReset() {
+    Serial.println("DRQ:INT:RES");
+}
+
+void sendQDiv(const float qDiv) {
+    Serial.print("DRQ:QD:");
+    Serial.println(qDiv);
+}
+
+void sendQOffset(const float qOffset) {
+    Serial.print("DRQ:QO:");
+    Serial.println(qOffset);
+}
+
+void mqttDataCallback(char* topic, const uint8_t* payload, unsigned int length) {
+    String topicStr = String(topic);
+
+    if (!topicStr.startsWith(generalTopicBase)) return;
+
+    // Serial.print("Message arrived [");
+    // Serial.print(topic);
+    // Serial.print("] ");
+    char payloadCStr[length + 1];
+    for (unsigned int i = 0; i < length; i++) {
+        payloadCStr[i] = (char)payload[i];
+    }
+    payloadCStr[length] = '\0';
+//    Serial.print(payloadCStr);
+//    Serial.println();
+
+    if (topicStr.equals(generalTopicBase + qDivTopic)) {
+        float qDivNew = strtof(payloadCStr, nullptr);
+        if (qDiv != qDivNew) {
+            sendQDiv(qDivNew);
+            qDiv = qDivNew;
+        }
+    }
+
+    if (topicStr.equals(generalTopicBase + qOffsetTopic)) {
+        float qOffsetNew = strtof(payloadCStr, nullptr);
+        if (qOffset != qOffsetNew) {
+            sendQDiv(qOffsetNew);
+            qOffset = qOffsetNew;
+        }
+    }
+
+    if (topicStr.equals(generalTopicBase + buttonResetTopic)) {
+        const bool pressed = strcasecmp(payloadCStr, "press") == 0;
+        if (pressed) {
+            sendCmdReset();
+        }
+    }
 }

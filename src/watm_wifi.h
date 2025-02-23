@@ -8,6 +8,7 @@
 void configModeCallback (WiFiManager *myWiFiManager);
 
 void sendState();
+void mqttDataCallback(char *topic, const uint8_t* payload, unsigned int length);
 
 void sendCmdRefreshData();
 
